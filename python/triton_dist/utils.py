@@ -313,6 +313,7 @@ def initialize_distributed(seed=None, initialize_shmem: bool = True) -> torch.di
         backend="cpu:gloo,cuda:nccl",
         world_size=WORLD_SIZE,
         rank=RANK,
+        device_id=torch.device(LOCAL_RANK),
         timeout=datetime.timedelta(seconds=1800),
     )
     assert torch.distributed.is_initialized()
