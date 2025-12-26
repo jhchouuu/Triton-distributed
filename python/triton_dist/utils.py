@@ -590,7 +590,7 @@ def get_nvshmem_hash():
 
 def get_rocshmem_home():
     return os.getenv("ROCSHMEM_HOME",
-                     Path(__file__).parent.parent / "shmem" / "rocshmem_bind" / "rocshmem_build" / "install")
+                     Path(__file__).parent.parent.parent / "shmem" / "rocshmem_bind" / "rocshmem_build" / "install")
 
 
 @functools.lru_cache
