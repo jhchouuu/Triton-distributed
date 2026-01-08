@@ -94,58 +94,18 @@ import torch.distributed
 from triton_dist.utils import initialize_distributed
 from triton_dist.profiler_utils import perf_func, group_profile
 import mori.shmem as mori_shmem
+from mori.shmem import (
+    MoriShmemBuffer,
+    mori_shmem_create_tensor,
+    symm_mori_shmem_tensor,
+    mori_shmem_create_tensor_list_intra_node,
+)
 import triton
 import triton_dist
 import triton.language as tl
 from triton_dist.language.extra import libshmem_device
 from triton_dist.language.extra.language_extra import threads_per_warp
 from triton_dist.language.extra.hip.language_extra import tid
-
-
-# Simple helper to wrap mori shmem pointer as torch tensor
-class MoriShmemBuffer:
-    def __init__(self, ptr, nbytes, dtype: torch.dtype):
-        self.ptr = ptr
-        self.nbytes = nbytes
-        self.dtype = dtype
-        self.__cuda_array_interface__ = {
-            "data": (self.ptr, False),
-            "shape": (self.nbytes,),
-            "typestr": "<i1",  # uint8
-            "strides": None,
-            "version": 3,
-        }
-
-
-def mori_shmem_create_tensor(shape, dtype) -> torch.Tensor:
-    nbytes = torch.Size(shape).numel() * dtype.itemsize
-    torch.cuda.synchronize()
-    ptr = mori_shmem.shmem_malloc(nbytes)
-    assert ptr != 0, "mori_shmem.shmem_malloc failed"
-    torch.cuda.synchronize()
-    buffer = MoriShmemBuffer(ptr, nbytes, dtype)
-    # First create as uint8 tensor (byte array), then view as target dtype
-    tensor = torch.as_tensor(buffer, device='cuda').view(dtype).view(*shape)
-    setattr(tensor, "__symm_tensor__", True)
-    return tensor
-
-def symm_mori_shmem_tensor(tensor: torch.Tensor, peer: int) -> torch.Tensor:
-
-    assert getattr(tensor, "__symm_tensor__",
-                   False), "tensor is not a symm_tensor"
-
-    if peer == mori_shmem.shmem_mype():
-        return tensor
-
-    ptr = mori_shmem.shmem_ptr_p2p(tensor.data_ptr(), mori_shmem.shmem_mype(), peer)
-    buffer = MoriShmemBuffer(ptr, tensor.nbytes, tensor.dtype)
-    return torch.as_tensor(buffer,
-                           device="cuda").view(tensor.dtype).view(tensor.shape)
-
-
-def mori_shmem_create_tensor_list_intra_node(shape, dtype, num_ranks):
-    tensor = mori_shmem_create_tensor(shape, dtype)
-    return [symm_mori_shmem_tensor(tensor, i) for i in range(num_ranks)]
 
 
 @triton_dist.jit

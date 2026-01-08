@@ -49,32 +49,7 @@ if os.path.exists(_triton_python_path):
 
 from triton_dist.utils import HIP_CHECK, initialize_distributed, finalize_distributed, get_triton_dist_world
 import mori.shmem as mori_shmem
-
-
-# Simple helper to wrap mori shmem pointer as torch tensor
-class MoriShmemBuffer:
-    def __init__(self, ptr, nbytes, dtype: torch.dtype):
-        self.ptr = ptr
-        self.nbytes = nbytes
-        self.dtype = dtype
-        self.__cuda_array_interface__ = {
-            "data": (self.ptr, False),
-            "shape": (self.nbytes,),
-            "typestr": "<i1",  # uint8
-            "strides": None,
-            "version": 3,
-        }
-
-def mori_shmem_create_tensor(shape, dtype):
-    """Create a torch tensor backed by mori shmem memory"""
-    nbytes = torch.tensor(shape).prod().item() * dtype.itemsize
-    torch.cuda.synchronize()
-    ptr = mori_shmem.shmem_malloc(nbytes)
-    assert ptr != 0, "mori_shmem.shmem_malloc failed"
-    buffer = MoriShmemBuffer(ptr, nbytes, dtype)
-    tensor = torch.as_tensor(buffer, device="cuda").view(dtype).view(shape)
-    tensor._mori_ptr = ptr  # Keep reference to free later
-    return tensor
+from mori.shmem import mori_shmem_create_tensor
 
 
 def test_mori_shmem_basic():
