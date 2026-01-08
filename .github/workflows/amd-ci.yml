@@ -128,3 +128,4 @@ jobs:
       - name: Mori SHMEM API tests
         run: |
           bash ./scripts/launch_amd.sh ./python/triton_dist/test/amd/test_mori_shmem_api.py
+          bash ./scripts/launch_amd.sh ./python/triton_dist/test/amd/test_mori_shmem_bw.py
