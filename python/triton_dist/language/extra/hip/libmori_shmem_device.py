@@ -43,6 +43,30 @@ def my_pe(_semantic=None):
 
 
 @core.extern
+def barrier_all(_semantic=None):
+    return extern_call(
+        "libmori_shmem_device",
+        "",
+        [],
+        {(): ("mori_shmem_barrier_all_thread", ())},
+        is_pure=False,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
+def barrier_all_block(_semantic=None):
+    return extern_call(
+        "libmori_shmem_device",
+        "",
+        [],
+        {(): ("mori_shmem_barrier_all_block", ())},
+        is_pure=False,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
 def n_pes(_semantic=None):
     return extern_call(
         "libmori_shmem_device",
