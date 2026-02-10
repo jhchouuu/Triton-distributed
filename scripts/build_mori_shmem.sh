@@ -47,7 +47,7 @@ echo "=========================================="
 # Install mori Python interface (this will also build and install C++ library via CMake)
 echo "Installing mori..."
 cd "${MORI_DIR}"
-if pip3 install . --no-build-isolation --verbose; then
+if BUILD_SHMEM_DEVICE_WRAPPER=ON pip3 install . --no-build-isolation --verbose; then
     echo "pip3 install completed successfully."
 else
     echo "Error: pip3 install failed. Aborting build." >&2
