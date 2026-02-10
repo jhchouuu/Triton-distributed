@@ -275,7 +275,7 @@ def putmem_signal(dest, source, bytes, sig_addr, signal, sig_op, pe):
 
 
 @_shmem_module.dispatch
-def putmem_signal_nbi_block(dest, source, bytes, sig_addr, signal, sig_op, pe):
+def putmem_signal_nbi_block(dest, source, bytes, sig_addr, signal, sig_op, pe, qp_id=0):
     ...
 
 
@@ -321,6 +321,11 @@ def signal_op(sig_addr, signal, sig_op, pe):
 
 @_shmem_module.dispatch
 def signal_wait_until(sig_addr, cmp_, cmp_val):
+    ...
+
+
+@_shmem_module.dispatch
+def uint64_wait_until_equals(addr, val):
     ...
 
 
