@@ -299,6 +299,13 @@ def rocshmem_barrier_all_on_stream(stream: Optional[torch.cuda.Stream] = None):
     pyrocshmem.rocshmem_barrier_all_on_stream(stream)
 
 
+def mori_shmem_barrier_all_on_stream(stream: Optional[torch.cuda.Stream] = None):
+    if stream is None:
+        stream = torch.cuda.current_stream()
+    mori_shmem.shmem_barrier_on_stream(stream)
+    print(f"MORI SHMEM barrier all on stream {stream} passed")
+
+
 def initialize_distributed(seed=None, initialize_shmem: bool = True) -> torch.distributed.ProcessGroup:
     RANK = int(os.environ.get("RANK", 0))
     LOCAL_RANK = int(os.environ.get("LOCAL_RANK", 0))
