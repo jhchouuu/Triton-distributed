@@ -315,8 +315,8 @@ def kernel_combine_token_intra_node(
 ):
     """Combine expert outputs within a single node (AMD).
 
-    Uses dl.symm_at() + tl.load() for remote bf16 reads.
-    Accumulates in float32 and stores back as bf16.
+    Block-level vectorized loads (tl.arange) for best P2P access
+    granularity. Use large grid for parallelism.
     """
     rank = dl.rank()
     node_id = rank // local_world_size
@@ -346,7 +346,6 @@ def kernel_combine_token_intra_node(
                         ).to(tl.float32)
                         token_accum += token
             else:
-                # ENABLE_LOCAL_COMBINE: skip duplicate rank entries
                 for j in range(topk):
                     expert_idx = tl.load(topk_indices_buf + token_idx * topk + j)
                     expert_rank = expert_idx // expert_per_rank

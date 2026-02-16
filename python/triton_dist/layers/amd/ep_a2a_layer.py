@@ -286,6 +286,7 @@ class EPAll2AllLayer(torch.nn.Module):
             offset_dtype=torch.int32,
         )
         self.a2a_ctx = DispatchCombineContext.create(self.ep_config)
+        self._needs_postprocess = False  # skip on first dispatch
         self.intra_node_barrier_ctx = None  # TODO(AMD): BarrierAllContext if needed
 
         mori_shmem_barrier_all_on_stream()
@@ -497,6 +498,11 @@ class EPAll2AllLayer(torch.nn.Module):
             and exp_indices.shape[1] == self.topk
         )
         current_stream = torch.cuda.current_stream()
+        # Reset buffers from previous round (skip on first call)
+        if self._needs_postprocess:
+            self.dispatch_postprocess()
+            self.ep_barrier_all(current_stream)
+        self._needs_postprocess = True
         token_num, N = input.shape
         assert N == self.hidden
         self.a2a_ctx.token_send_buf_rdma[self.node_id, :token_num].copy_(input)
@@ -526,9 +532,9 @@ class EPAll2AllLayer(torch.nn.Module):
             ep_a2a_layout_desc,
             has_weight=has_weight,
         )
-        self.ep_barrier_all(current_stream)
-        self.dispatch_postprocess()
-        self.ep_barrier_all(current_stream)
+        # dispatch_token already has an internal barrier after P2P writes.
+        # dispatch_postprocess (buffer reset) is deferred to combine() exit
+        # to avoid an extra barrier pair here.
         copy_out = torch.empty(
             output_buf.shape, dtype=output_buf.dtype, device=output_buf.device
         )
@@ -573,7 +579,9 @@ class EPAll2AllLayer(torch.nn.Module):
         scatter_idx_i32 = ep_a2a_layout_desc.token_dst_scatter_idx.to(
             torch.int32
         )
-        kernel_combine_token_intra_node[grid](
+        # Use larger grid for better P2P latency hiding
+        combine_grid = (min(ep_a2a_layout_desc.num_dispatch_token_cur_rank, 256),)
+        kernel_combine_token_intra_node[combine_grid](
             ep_a2a_layout_desc.num_dispatch_token_cur_rank,
             input,
             combine_intra_node_out_buf,
@@ -586,14 +594,14 @@ class EPAll2AllLayer(torch.nn.Module):
             self.experts_per_rank,
             self.local_world_size,
             ENABLE_LOCAL_COMBINE=self.enable_local_combine,
-            BLOCK_H=128,
+            BLOCK_H=1024,
         )
         return combine_intra_node_out_buf
 
     def combine(self, input, ep_a2a_layout_desc: EPAllToAllLayoutDesc):
         assert input.is_contiguous() and input.dtype == self.dtype
         current_stream = torch.cuda.current_stream()
-        self.a2a_ctx.token_send_buf_rdma.fill_(0)
+        # token_send_buf_rdma.fill_(0) removed — not used by intra-node combine
         self.a2a_ctx.dispatch_output_buf[: input.shape[0]].copy_(input)
         combine_input = self.a2a_ctx.dispatch_output_buf[: input.shape[0]]
         self.ep_barrier_all(current_stream)
