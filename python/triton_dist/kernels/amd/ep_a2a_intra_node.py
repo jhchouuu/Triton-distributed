@@ -43,20 +43,11 @@ from triton_dist.language.extra.hip.language_extra import (
     __syncthreads,
     st,
     ld,
+    atomic_add_per_warp,
 )
 from triton_dist.language.extra.language_extra import threads_per_warp
 from triton_dist.kernels.amd.common_ops import barrier_on_this_grid
-
-# TODO(AMD): NVSHMEM_SIGNAL_DTYPE used for symmetric signals; confirm mori_shmem
-# uses same dtype or add mori equivalent (e.g. torch.uint64).
-from triton_dist.utils import NVSHMEM_SIGNAL_DTYPE
-
-# TODO(AMD): atomic_add_per_warp is CUDA-specific (warp-level atomic + shuffle).
-# On HIP, implement e.g. lane 0 does atomic_add + warp shuffle broadcast,
-# or use HIP equivalent if available. For now we use a placeholder that
-# uses tl.atomic_add from lane 0 only (other lanes get wrong value - replace
-# with proper implementation).
-# from triton_dist.language.extra.hip.language_extra import ...  # add when implemented
+from triton_dist.utils import MORI_SHMEM_SIGNAL_DTYPE
 
 
 ########## Triton kernels (intra-node only) ##########
@@ -89,9 +80,6 @@ def kernel_dispatch_token_intra_node(
     memory) for put and signal. libshmem_device must be built for mori_shmem
     device API when using mori backend.
     """
-    # TODO(AMD): atomic_add_per_warp equivalent on HIP (warp atomic + broadcast).
-    # TODO(AMD): Ensure libshmem_device is mori device lib so putmem_signal_warp,
-    #   putmem_warp, symm_at use mori_shmem device API.
     WARP_SIZE = threads_per_warp()
     rank = dl.rank()
     world_size = dl.num_ranks()
@@ -106,43 +94,43 @@ def kernel_dispatch_token_intra_node(
 
     for token_offset in range(global_warp_id, token_num, total_comm_warps):
         for j in range(topk):
-            expert_idx = ld(topk_indices_tensor + token_offset * topk + j)
+
+            expert_idx = tl.load(topk_indices_tensor + token_offset * topk + j)
             expert_rank = expert_idx // experts_per_rank
             expert_idx_intra_rank = expert_idx % experts_per_rank
             if expert_rank < world_size:
                 if not WITH_SCATTER_INDICES:
-                    # TODO(AMD): Prefer atomic_add_per_warp (lane 0 add + broadcast) for consistency
-                    # with NVIDIA. Here lane 0 does atomic_add and writes; all lanes read in next loop.
-                    if thread_idx % WARP_SIZE == 0:
-                        store_idx = tl.atomic_add(
-                            recv_buf_offset_per_expert
-                            + expert_rank * experts_per_rank * world_size
-                            + expert_idx_intra_rank * world_size
-                            + rank,
-                            1,
-                            scope="agent",
-                            semantic="monotonic",
-                        )
-                        st(
-                            token_dst_scatter_idx + token_offset * topk + j,
-                            store_idx,
-                        )
+                    store_idx = atomic_add_per_warp(
+                        recv_buf_offset_per_expert
+                        + expert_rank * experts_per_rank * world_size
+                        + expert_idx_intra_rank * world_size
+                        + rank,
+                        1,
+                        scope="agent",
+                        semantic="monotonic",
+                    )
+                    st(
+                        token_dst_scatter_idx + token_offset * topk + j,
+                        store_idx,
+                    )
+
+        scatter_idx_i64 = token_dst_scatter_idx.to(tl.pointer_type(tl.int64))
 
         for j in range(topk):
-            expert_idx = ld(topk_indices_tensor + token_offset * topk + j)
+            expert_idx = tl.load(topk_indices_tensor + token_offset * topk + j)
             expert_rank = expert_idx // experts_per_rank
             expert_idx_intra_rank = expert_idx % experts_per_rank
-            store_idx = ld(token_dst_scatter_idx + token_offset * topk + j)
+            store_idx = tl.load(scatter_idx_i64 + token_offset * topk + j)
             if expert_rank < world_size:
                 skip_this_token = False
                 skipped_token_mapping_idx = store_idx
                 for topk_idx in range(j):
-                    if not skip_this_token and ld(
+                    if not skip_this_token and tl.load(
                         topk_indices_tensor + token_offset * topk + topk_idx
                     ) // experts_per_rank == expert_rank:
                         skip_this_token = True
-                        skipped_token_mapping_idx = ld(
-                            token_dst_scatter_idx + token_offset * topk + topk_idx
+                        skipped_token_mapping_idx = tl.load(
+                            scatter_idx_i64 + token_offset * topk + topk_idx
                         )
                 src_ptr = input_buf + token_offset * hidden_size
                 dst_ptr = output_buf + store_idx * hidden_size
@@ -173,7 +161,7 @@ def kernel_dispatch_token_intra_node(
                             + j,
                             expert_rank,
                         ),
-                        skipped_token_mapping_idx,
+                        store_idx,
                     )
                 if HAS_WEIGHT:
                     libshmem_device.putmem_warp(
@@ -214,19 +202,9 @@ def kernel_skipped_token_local_dispatch_intra_node(
         if skipped_token_mapping_idx != recv_token_offset:
             dst_ptr = dispatch_out_buf + recv_token_offset * hidden_size
             src_ptr = dispatch_out_buf + skipped_token_mapping_idx * hidden_size
-            vec_size: tl.constexpr = (
-                128 // dispatch_out_buf.dtype.element_ty.primitive_bitwidth
+            libshmem_device.putmem_warp(
+                dst_ptr, src_ptr, bytes_per_token, dl.rank()
             )
-            if hidden_size % vec_size == 0:
-                for i in range(
-                    lane_id * vec_size, hidden_size, WARP_SIZE * vec_size
-                ):
-                    vec = dl.ld_vector(src_ptr + i, vec_size=vec_size)
-                    dl.st_vector(dst_ptr + i, vec)
-            else:
-                libshmem_device.putmem_warp(
-                    dst_ptr, src_ptr, bytes_per_token, dl.rank()
-                )
         if ENABLE_LOCAL_COMBINE:
             if lane_id == 0:
                 st(
@@ -257,154 +235,148 @@ def kernel_skipped_token_inplace_local_combine_intra_node(
     topk: tl.constexpr,
     num_warps: tl.constexpr,
 ):
-    """Pre-combine local reduction for tokens with multiple same-rank experts."""
+    """Pre-combine local reduction for tokens with multiple same-rank experts.
+
+    Uses simt_exec_region + ld()/st() for warp-level parallelism.
+    tl.load()/tl.store() are block-level ops and don't work per-thread
+    inside simt_exec_region on AMD. ld()/st() (extern_elementwise) are
+    true per-thread scalar ops.
+    """
     WARP_SIZE = threads_per_warp()
     pid = tl.program_id(0)
     num_pid = tl.num_programs(0)
-    thread_idx = tid(0)
-    warp_id = thread_idx // WARP_SIZE
-    lane_id = thread_idx % WARP_SIZE
-    total_warps = num_warps * num_pid
-    global_warp_id = pid * num_warps + warp_id
     input_dtype = combine_input_buf.dtype.element_ty
-    for combine_token_offset in range(
-        global_warp_id, combine_token_num, total_warps
-    ):
-        skipped_token_mapping_idx = ld(
-            intra_node_dispatch_skipped_token_mapping_indices + combine_token_offset
-        )
-        if skipped_token_mapping_idx == combine_token_offset:
-            vec_size: tl.constexpr = (
-                128 // input_dtype.primitive_bitwidth
+
+    with dl.simt_exec_region() as (thread_id, block_size):
+        warp_id = thread_id // WARP_SIZE
+        lane_id = thread_id % WARP_SIZE
+        warps_per_block = block_size // WARP_SIZE
+        total_warps = warps_per_block * num_pid
+        global_warp_id = pid * warps_per_block + warp_id
+
+        for combine_token_offset in range(
+            global_warp_id, combine_token_num, total_warps
+        ):
+            skipped_token_mapping_idx = ld(
+                intra_node_dispatch_skipped_token_mapping_indices
+                + combine_token_offset
             )
-            tl.static_assert(hidden_size % vec_size == 0)
-            local_combine_cnt = 0
-            for j in range(topk):
-                skipped_token_topk_mapping_idx = ld(
-                    skipped_token_topk_mapping_indices
-                    + combine_token_offset * topk
-                    + j
-                )
-                if skipped_token_topk_mapping_idx != -1:
-                    local_combine_cnt += 1
-            if local_combine_cnt > 1:
-                for i in range(
-                    lane_id * vec_size, hidden_size, WARP_SIZE * vec_size
-                ):
-                    token_accum = dl.zeros_vector(vec_size, tl.float32)
-                    for j in range(topk):
-                        skipped_token_topk_mapping_idx = ld(
-                            skipped_token_topk_mapping_indices
-                            + combine_token_offset * topk
-                            + j
-                        )
-                        if skipped_token_topk_mapping_idx != -1:
-                            src_ptr = (
-                                combine_input_buf
-                                + skipped_token_topk_mapping_idx * hidden_size
-                            )
-                            token = dl.ld_vector(
-                                src_ptr + i, vec_size=vec_size
-                            ).to(tl.float32)
-                            token_accum = token_accum + token
-                    dl.st_vector(
-                        combine_input_buf
-                        + combine_token_offset * hidden_size
-                        + i,
-                        token_accum.to(input_dtype),
+            if skipped_token_mapping_idx == combine_token_offset:
+                # First occurrence — count valid topk entries
+                local_combine_cnt = 0
+                for j in range(topk):
+                    skipped_token_topk_mapping_idx = ld(
+                        skipped_token_topk_mapping_indices
+                        + combine_token_offset * topk
+                        + j
                     )
+                    if skipped_token_topk_mapping_idx != -1:
+                        local_combine_cnt += 1
+                if local_combine_cnt > 1:
+                    # Warp-parallel accumulation over hidden dim
+                    for i in range(lane_id, hidden_size, WARP_SIZE):
+                        token_accum = tl.cast(0, tl.float32)
+                        for j in range(topk):
+                            skipped_token_topk_mapping_idx = ld(
+                                skipped_token_topk_mapping_indices
+                                + combine_token_offset * topk
+                                + j
+                            )
+                            if skipped_token_topk_mapping_idx != -1:
+                                src_ptr = (
+                                    combine_input_buf
+                                    + skipped_token_topk_mapping_idx * hidden_size
+                                )
+                                val = ld(src_ptr + i).to(tl.float32)
+                                token_accum = token_accum + val
+                        st(
+                            combine_input_buf
+                            + combine_token_offset * hidden_size
+                            + i,
+                            token_accum.to(input_dtype),
+                        )
 
 
-@triton_dist.jit
+@triton_dist.jit(do_not_specialize=["num_dispatch_tokens"])
 def kernel_combine_token_intra_node(
-    num_input_tokens_per_rank,
-    input_buf,
-    send_buf,
-    topk_indices_buf,
-    token_dst_scatter_idx,
+    num_dispatch_tokens,  # int — loop bound
+    input_buf,  # symm buffer (dispatch_output_buf), bf16
+    send_buf,  # [nnode, max_tokens, hidden] output (bf16)
+    topk_indices_buf,  # [max_tokens, topk] int32
+    token_dst_scatter_idx,  # [nnodes, max_tokens, topk] int32
     max_tokens: int,
-    topk: int,
+    topk: tl.constexpr,
     hidden_size: tl.constexpr,
     bytes_per_token: tl.constexpr,
     expert_per_rank: tl.constexpr,
     local_world_size: tl.constexpr,
     ENABLE_LOCAL_COMBINE: tl.constexpr,
-    num_warps: tl.constexpr,
+    BLOCK_H: tl.constexpr,
 ):
-    """Combine expert outputs within a single node (symmetric memory read + accumulate)."""
-    WARP_SIZE = threads_per_warp()
+    """Combine expert outputs within a single node (AMD).
+
+    Uses dl.symm_at() + tl.load() for remote bf16 reads.
+    Accumulates in float32 and stores back as bf16.
+    """
     rank = dl.rank()
     node_id = rank // local_world_size
     pid = tl.program_id(0)
     num_pid = tl.num_programs(0)
-    thread_idx = tid(0)
-    lane_id = thread_idx % WARP_SIZE
-    total_warps = num_warps * num_pid
-    warp_id = thread_idx // WARP_SIZE
-    global_warp_id = pid * num_warps + warp_id
-    num_dispatch_token_cur_rank = tl.load(num_input_tokens_per_rank + rank)
-    for token_idx in range(
-        global_warp_id, num_dispatch_token_cur_rank, total_warps
-    ):
-        vec_size: tl.constexpr = (
-            128 // send_buf.dtype.element_ty.primitive_bitwidth
-        )
-        tl.static_assert(hidden_size % vec_size == 0)
-        for i in range(
-            lane_id * vec_size, hidden_size, WARP_SIZE * vec_size
-        ):
-            token_accum = dl.zeros_vector(vec_size, tl.float32)
+
+    for token_idx in range(pid, num_dispatch_tokens, num_pid):
+        for block_start in range(0, hidden_size, BLOCK_H):
+            offs = tl.arange(0, BLOCK_H)
+            token_accum = tl.zeros([BLOCK_H], dtype=tl.float32)
+
             if not ENABLE_LOCAL_COMBINE:
                 for j in range(topk):
-                    expert_idx = ld(topk_indices_buf + (token_idx) * topk + j)
+                    expert_idx = tl.load(topk_indices_buf + token_idx * topk + j)
                     expert_rank = expert_idx // expert_per_rank
                     expert_node_idx = expert_rank // local_world_size
+
                     if expert_node_idx == node_id:
-                        token_scatter_idx = ld(
-                            token_dst_scatter_idx + (token_idx) * topk + j
+                        token_scatter_idx = tl.load(
+                            token_dst_scatter_idx + token_idx * topk + j
                         )
-                        remote_input_ptr = dl.symm_at(input_buf, expert_rank)
-                        remote_input_ptr = tl.multiple_of(remote_input_ptr, 32)
-                        token = dl.ld_vector(
-                            remote_input_ptr
+                        remote_ptr = dl.symm_at(input_buf, expert_rank)
+                        token = tl.load(
+                            remote_ptr
                             + token_scatter_idx * hidden_size
-                            + i,
-                            vec_size=vec_size,
+                            + block_start + offs
                         ).to(tl.float32)
-                        token_accum = token_accum + token.to(tl.float32)
+                        token_accum += token
             else:
+                # ENABLE_LOCAL_COMBINE: skip duplicate rank entries
                 for j in range(topk):
-                    expert_idx = ld(topk_indices_buf + (token_idx) * topk + j)
+                    expert_idx = tl.load(topk_indices_buf + token_idx * topk + j)
                     expert_rank = expert_idx // expert_per_rank
                     expert_node_idx = expert_rank // local_world_size
+
                     if expert_node_idx == node_id:
                         skip_this_token = False
                         for topk_idx in range(j):
-                            if not skip_this_token and ld(
+                            prev_expert = tl.load(
                                 topk_indices_buf + token_idx * topk + topk_idx
-                            ) // expert_per_rank == expert_rank:
+                            )
+                            if not skip_this_token and prev_expert // expert_per_rank == expert_rank:
                                 skip_this_token = True
+
                         if not skip_this_token:
-                            token_scatter_idx = ld(
-                                token_dst_scatter_idx + (token_idx) * topk + j
+                            token_scatter_idx = tl.load(
+                                token_dst_scatter_idx + token_idx * topk + j
                             )
-                            remote_input_ptr = dl.symm_at(
-                                input_buf, expert_rank
-                            )
-                            remote_input_ptr = tl.multiple_of(
-                                remote_input_ptr, 32
-                            )
-                            token = dl.ld_vector(
-                                remote_input_ptr
+                            remote_ptr = dl.symm_at(input_buf, expert_rank)
+                            token = tl.load(
+                                remote_ptr
                                 + token_scatter_idx * hidden_size
-                                + i,
-                                vec_size=vec_size,
+                                + block_start + offs
                             ).to(tl.float32)
-                            token_accum = token_accum + token.to(tl.float32)
-            dl.st_vector(
+                            token_accum += token
+
+            tl.store(
                 send_buf
                 + (node_id * max_tokens + token_idx) * hidden_size
-                + i,
+                + block_start + offs,
                 token_accum.to(send_buf.dtype.element_ty),
             )
 
@@ -614,7 +586,6 @@ def get_ag_splits_and_recv_offset_for_dispatch_intra_node(
       - token_dst_scatter_idx (when full_scatter_indices is provided)
     """
     device = full_splits_buf.device
-    print(f"device, world_size, experts_per_rank, world_size = {device}, {world_size}, {experts_per_rank}, {world_size}")
     num_recv_tokens_per_rank_cpu = torch.empty(
         (world_size,), dtype=torch.int32, device="cpu", pin_memory=True
     )
@@ -649,7 +620,7 @@ def get_ag_splits_and_recv_offset_for_dispatch_intra_node(
     counter_workspace = torch.zeros(
         (num_grid_sync,), dtype=torch.int32, device=device
     )
-    assert splits_signal_buf.dtype == NVSHMEM_SIGNAL_DTYPE
+    assert splits_signal_buf.dtype == MORI_SHMEM_SIGNAL_DTYPE
     assert (
         len(full_splits_buf.shape) == 2
         and full_splits_buf.shape[1] == local_splits.shape[0]

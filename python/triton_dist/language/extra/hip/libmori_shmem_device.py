@@ -218,6 +218,36 @@ def putmem_nbi(dest, source, nbytes, pe, qp_id=0, _semantic=None):
 
 
 @core.extern
+def putmem_warp(dest, source, nbytes, pe, qp_id=0, _semantic=None):
+    """Non-blocking put memory operation (warp scope).
+
+    All threads in the warp must participate.
+
+    Args:
+        dest: Symmetric address on target PE
+        source: Source pointer on local PE
+        nbytes: Number of bytes to transfer
+        pe: Target PE number
+        qp_id: Queue Pair ID (default: 0)
+    """
+    return extern_call(
+        "libmori_shmem_device",
+        "",
+        [
+            tl.cast(dest, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(source, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(nbytes, tl.uint64, _semantic=_semantic),
+            tl.cast(pe, tl.int32, _semantic=_semantic),
+            tl.cast(qp_id, tl.int32, _semantic=_semantic),
+        ],
+        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.int32, tl.int32):
+         ("mori_shmem_putmem_nbi_warp", ())},
+        is_pure=False,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
 def put_uint32_nbi(dest, source, nelems, pe, qp_id=0, _semantic=None):
     """Non-blocking put uint32 operation (thread scope).
     
@@ -361,6 +391,44 @@ def putmem_nbi_signal(dest, source, bytes, sig_addr, signal_value, signal_op, pe
         ],
         {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.pointer_type(tl.void), tl.uint64, tl.int32, tl.int32, tl.int32):
          ("mori_shmem_putmem_nbi_signal_thread", ())},
+        is_pure=False,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
+def putmem_signal_warp(dest, source, bytes, sig_addr, signal_value, signal_op, pe, qp_id=0, _semantic=None):
+    """Non-blocking put memory with signal operation (warp scope).
+
+    Performs a non-blocking memory transfer and atomically updates a signal value
+    at the destination PE after the data transfer completes. All threads in the
+    warp must participate.
+
+    Args:
+        dest: Symmetric address on target PE for data
+        source: Source pointer on local PE
+        bytes: Number of bytes to transfer
+        sig_addr: Symmetric address on target PE for signal
+        signal_value: Signal value to write
+        signal_op: Signal operation type (e.g., MORI_SIGNAL_SET, MORI_SIGNAL_ADD)
+        pe: Target PE number
+        qp_id: Queue Pair ID (default: 0)
+    """
+    return extern_call(
+        "libmori_shmem_device",
+        "",
+        [
+            tl.cast(dest, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(source, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(bytes, tl.uint64, _semantic=_semantic),
+            tl.cast(sig_addr, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(signal_value, tl.uint64, _semantic=_semantic),
+            tl.cast(signal_op, tl.int32, _semantic=_semantic),
+            tl.cast(pe, tl.int32, _semantic=_semantic),
+            tl.cast(qp_id, tl.int32, _semantic=_semantic),
+        ],
+        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.pointer_type(tl.void), tl.uint64,
+          tl.int32, tl.int32, tl.int32): ("mori_shmem_putmem_nbi_signal_warp", ())},
         is_pure=False,
         _semantic=_semantic,
     )

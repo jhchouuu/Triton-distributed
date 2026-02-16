@@ -47,8 +47,7 @@ from triton_dist.kernels.amd.ep_a2a import (
 
 from triton_dist.utils import mori_shmem_barrier_all_on_stream
 
-# Signal buffer dtype for mori_shmem (device barrier/signal); keep in sync with device lib if needed.
-MORI_SHMEM_SIGNAL_DTYPE = torch.int64
+from triton_dist.utils import MORI_SHMEM_SIGNAL_DTYPE
 from triton_dist.kernels.amd.common_ops import barrier_all_on_stream
 
 # Symmetric tensor: use mori_shmem directly (same as test_mori_shmem_api.py).
@@ -226,15 +225,11 @@ class DispatchCombineContext:
         _mori_shmem_free_sync(self.dispatch_output_buf)
         _mori_shmem_free_sync(self.weight_recv_buf)
         torch.distributed.barrier()
-        Alignment = 1024
-        alloc_token = (
-            (dispatch_recv_tokens + Alignment - 1) // Alignment * Alignment * 2
-        )
         self.dispatch_output_buf = mori_shmem_create_tensor(
-            [alloc_token, self.ep_config.hidden], self.ep_config.token_dtype
+            [dispatch_recv_tokens, self.ep_config.hidden], self.ep_config.token_dtype
         )
         self.weight_recv_buf = mori_shmem_create_tensor(
-            [alloc_token, self.ep_config.topk], self.ep_config.weight_dtype
+            [dispatch_recv_tokens, self.ep_config.topk], self.ep_config.weight_dtype
         )
         return self.dispatch_output_buf, self.weight_recv_buf
 
@@ -381,10 +376,16 @@ class EPAll2AllLayer(torch.nn.Module):
             with_scatter_indices = False
             token_dst_scatter_idx = torch.empty(
                 (self.nnodes, self.max_tokens, self.topk),
-                dtype=self.offset_dtype,
+                dtype=torch.uint64,
                 device=recv_buf_offset_per_expert.device,
             )
         else:
+            assert len(token_dst_scatter_idx.shape) == 3
+            assert token_dst_scatter_idx.shape[0] == self.nnodes
+            assert token_dst_scatter_idx.shape[1] == self.max_tokens
+            assert token_dst_scatter_idx.shape[2] == self.topk
+            assert token_dst_scatter_idx.dtype == self.offset_dtype
+            assert token_dst_scatter_idx.is_contiguous()
             with_scatter_indices = True
 
         dispatch_recv_token_num = output_buf.shape[0]
@@ -407,10 +408,11 @@ class EPAll2AllLayer(torch.nn.Module):
             self.local_world_size,
             HAS_WEIGHT=has_weight,
             WITH_SCATTER_INDICES=with_scatter_indices,
-            num_warps=32,
+            num_warps=16,
         )
         current_stream = torch.cuda.current_stream()
         self.ep_barrier_all(current_stream)
+
         intra_node_dispatch_skipped_token_mapping_indices_copy = torch.empty(
             (dispatch_recv_token_num,),
             dtype=self.a2a_ctx.intra_node_dispatch_skipped_token_mapping_indices.dtype,
@@ -432,7 +434,7 @@ class EPAll2AllLayer(torch.nn.Module):
             self.dtype.itemsize * self.hidden,
             self.topk,
             ENABLE_LOCAL_COMBINE=self.enable_local_combine,
-            num_warps=32,
+            num_warps=16,
         )
         ep_a2a_layout_desc.skipped_token_mapping_indices = (
             intra_node_dispatch_skipped_token_mapping_indices_copy
@@ -440,6 +442,7 @@ class EPAll2AllLayer(torch.nn.Module):
         ep_a2a_layout_desc.skipped_token_topk_mapping_indices = (
             intra_node_dispatch_skipped_token_topk_mapping_indices_copy
         )
+
         if not with_scatter_indices:
             ep_a2a_layout_desc.token_dst_scatter_idx = token_dst_scatter_idx
         return ep_a2a_layout_desc
@@ -550,6 +553,7 @@ class EPAll2AllLayer(torch.nn.Module):
         if self.enable_local_combine:
             assert ep_a2a_layout_desc.skipped_token_mapping_indices is not None
             assert ep_a2a_layout_desc.skipped_token_mapping_indices.shape[0] == input.shape[0]
+            # Warp-level pre-combine using simt_exec_region + ld()/st().
             kernel_skipped_token_inplace_local_combine_intra_node[grid](
                 input.shape[0],
                 ep_a2a_layout_desc.skipped_token_mapping_indices,
@@ -557,7 +561,7 @@ class EPAll2AllLayer(torch.nn.Module):
                 input,
                 self.hidden,
                 self.topk,
-                num_warps=32,
+                num_warps=16,
             )
             self.ep_barrier_all(current_stream)
         combine_intra_node_out_buf = torch.empty(
@@ -565,12 +569,16 @@ class EPAll2AllLayer(torch.nn.Module):
             dtype=input.dtype,
             device=input.device,
         )
+        # Cast scatter indices from uint64 to int32
+        scatter_idx_i32 = ep_a2a_layout_desc.token_dst_scatter_idx.to(
+            torch.int32
+        )
         kernel_combine_token_intra_node[grid](
-            ep_a2a_layout_desc.num_input_tokens_per_rank,
+            ep_a2a_layout_desc.num_dispatch_token_cur_rank,
             input,
             combine_intra_node_out_buf,
             ep_a2a_layout_desc.topk_indices_tensor,
-            ep_a2a_layout_desc.token_dst_scatter_idx,
+            scatter_idx_i32,
             self.max_tokens,
             self.topk,
             self.hidden,
@@ -578,7 +586,7 @@ class EPAll2AllLayer(torch.nn.Module):
             self.experts_per_rank,
             self.local_world_size,
             ENABLE_LOCAL_COMBINE=self.enable_local_combine,
-            num_warps=32,
+            BLOCK_H=128,
         )
         return combine_intra_node_out_buf
 
@@ -589,8 +597,10 @@ class EPAll2AllLayer(torch.nn.Module):
         self.a2a_ctx.dispatch_output_buf[: input.shape[0]].copy_(input)
         combine_input = self.a2a_ctx.dispatch_output_buf[: input.shape[0]]
         self.ep_barrier_all(current_stream)
+
         reduce_buf = self.combine_token_intra_node_and_send(
-            combine_input, ep_a2a_layout_desc
+            combine_input,
+            ep_a2a_layout_desc,
         )
         self.ep_barrier_all(current_stream)
         return reduce_buf.reshape(-1, self.hidden)[

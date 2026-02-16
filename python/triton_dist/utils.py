@@ -317,7 +317,6 @@ def mori_shmem_barrier_all_on_stream(stream: Optional[torch.cuda.Stream] = None)
     if stream is None:
         stream = torch.cuda.current_stream()
     mori_shmem.shmem_barrier_on_stream(stream)
-    print(f"MORI SHMEM barrier all on stream {stream} passed")
 
 
 def initialize_distributed(seed=None, initialize_shmem: bool = True) -> torch.distributed.ProcessGroup:
@@ -675,6 +674,8 @@ def get_mori_home() -> Path:
 def get_mori_version():
     return "unknown"
 
+# mori_shmem C++ device API uses uint64_t for signals.
+MORI_SHMEM_SIGNAL_DTYPE = torch.uint64
 
 def _get_mori_shmem_libdevice():
     if os.getenv("MORI_HOME") is not None:
