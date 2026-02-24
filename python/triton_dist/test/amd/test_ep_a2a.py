@@ -38,7 +38,42 @@ Usage:
 
   # Performance benchmark:
   TRITON_DIST_SHMEM_BACKEND=mori_shmem bash ./scripts/launch_amd.sh \\
-      ./python/triton_dist/test/amd/test_ep_a2a.py --rounds 3
+      ./python/triton_dist/test/amd/test_ep_a2a.py --rounds 5 --bench_iters 10
+
+Performance (MI325X, 8 GPU, N=7168, G=256, topk=8, bench_iters=10,
+             dispatch_grid=512, combine_grid=304):
+  PT = PyTorch (all_to_all baseline), TD = Triton-dist, speedup = PT / TD
+
+  Default mode:
+    M     | PT disp | PT comb | TD disp | TD comb | disp  | comb  | total
+    ------|---------|---------|---------|---------|-------|-------|------
+    4096  | 2.19ms  | 3.31ms  | 1.80ms  | 1.92ms  | 1.22x | 1.72x | 1.48x
+    3780  | 1.99ms  | 3.05ms  | 1.62ms  | 1.52ms  | 1.23x | 2.01x | 1.60x
+    3206  | 2.06ms  | 3.12ms  | 1.66ms  | 1.59ms  | 1.25x | 1.96x | 1.59x
+    2638  | 2.06ms  | 3.13ms  | 1.65ms  | 1.70ms  | 1.24x | 1.84x | 1.55x
+    2395  | 1.93ms  | 3.04ms  | 1.55ms  | 1.52ms  | 1.25x | 2.00x | 1.62x
+    2264  | 1.80ms  | 2.83ms  | 1.47ms  | 1.37ms  | 1.22x | 2.06x | 1.63x
+
+  enable-local-combine mode:
+    M     | PT disp | PT comb | TD disp | TD comb | disp  | comb  | total
+    ------|---------|---------|---------|---------|-------|-------|------
+    4096  | 2.18ms  | 3.29ms  | 1.80ms  | 2.37ms  | 1.21x | 1.38x | 1.31x
+    3780  | 1.98ms  | 3.07ms  | 1.62ms  | 1.92ms  | 1.22x | 1.59x | 1.43x
+    3206  | 2.07ms  | 3.16ms  | 1.66ms  | 2.00ms  | 1.25x | 1.58x | 1.43x
+    2638  | 2.05ms  | 3.14ms  | 1.65ms  | 2.02ms  | 1.24x | 1.55x | 1.41x
+    2395  | 1.92ms  | 2.94ms  | 1.55ms  | 1.87ms  | 1.24x | 1.58x | 1.42x
+    2264  | 1.79ms  | 2.79ms  | 1.48ms  | 1.74ms  | 1.21x | 1.60x | 1.41x
+
+  with-scatter-indices mode:
+    M     | PT disp | PT comb | TD disp | TD comb | disp  | comb  | total
+    ------|---------|---------|---------|---------|-------|-------|------
+    4096  | 2.20ms  | 3.30ms  | 1.80ms  | 1.93ms  | 1.22x | 1.71x | 1.47x
+    3780  | 1.97ms  | 3.08ms  | 1.62ms  | 1.52ms  | 1.22x | 2.03x | 1.60x
+    3206  | 2.08ms  | 3.17ms  | 1.65ms  | 1.59ms  | 1.26x | 2.00x | 1.62x
+    2638  | 2.07ms  | 3.33ms  | 1.65ms  | 1.72ms  | 1.25x | 1.94x | 1.60x
+    2395  | 1.94ms  | 2.98ms  | 1.55ms  | 1.52ms  | 1.25x | 1.96x | 1.59x
+    2264  | 1.81ms  | 2.78ms  | 1.47ms  | 1.36ms  | 1.23x | 2.04x | 1.62x
+
 """
 
 import os
@@ -48,6 +83,26 @@ import random
 
 os.environ.setdefault("TRITON_DIST_SHMEM_BACKEND", "mori_shmem")
 os.environ.setdefault("MORI_SHMEM_HEAP_SIZE", "4G")
+
+
+def _patch_triton_cache():
+    """Monkey-patch FileCacheManager.put with filelock to fix multi-rank cold-cache race."""
+    import filelock
+    from triton.runtime.cache import FileCacheManager
+    _orig_put = FileCacheManager.put
+
+    def _locked_put(self, data, filename, binary=True):
+        filepath = self._make_path(filename)
+        if os.path.exists(filepath):
+            return filepath
+        lock = filelock.FileLock(self.lock_path, timeout=300)
+        with lock:
+            return _orig_put(self, data, filename, binary)
+        return filepath
+
+    FileCacheManager.put = _locked_put
+
+_patch_triton_cache()
 
 _test_dir = os.path.dirname(os.path.abspath(__file__))
 _workspace_root = os.path.abspath(os.path.join(_test_dir, "../../../.."))
@@ -101,6 +156,8 @@ def parse_args():
     parser.add_argument("--bench_iters", default=5, type=int, help="perf iterations")
     parser.add_argument("--rounds", default=5, type=int, help="perf rounds")
     parser.add_argument("--sm_margin", default=64, type=int, help="num SMs for kernels")
+    parser.add_argument("--dispatch-grid", default=512, type=int, help="dispatch kernel grid size")
+    parser.add_argument("--combine-grid", default=304, type=int, help="combine kernel grid size")
     parser.add_argument("--dtype", default="bfloat16", choices=list(DTYPE_MAP.keys()))
     parser.add_argument("--check", action="store_true", help="run correctness check")
     parser.add_argument("--with-scatter-indices", action="store_true")
@@ -313,6 +370,8 @@ if __name__ == "__main__":
         weight_dtype=torch.float32,
         num_sm=args.sm_margin,
         enable_local_combine=args.enable_local_combine,
+        dispatch_grid_size=args.dispatch_grid,
+        combine_grid_size=args.combine_grid,
     )
 
     def _make_data(token_num):

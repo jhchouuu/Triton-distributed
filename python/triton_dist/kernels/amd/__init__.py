@@ -22,8 +22,6 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
 ################################################################################
-from .allgather_gemm import ag_gemm_intra_node, create_ag_gemm_intra_node_context
-from .gemm_reduce_scatter import gemm_rs_intra_node, create_gemm_rs_intra_node_context
 from .ep_a2a_intra_node import (
     kernel_dispatch_token_intra_node,
     kernel_skipped_token_local_dispatch_intra_node,
@@ -31,6 +29,13 @@ from .ep_a2a_intra_node import (
     kernel_combine_token_intra_node,
     get_ag_splits_and_recv_offset_for_dispatch_intra_node,
 )
+
+try:
+    from .allgather_gemm import ag_gemm_intra_node, create_ag_gemm_intra_node_context
+    from .gemm_reduce_scatter import gemm_rs_intra_node, create_gemm_rs_intra_node_context
+except ImportError as e:
+    import warnings
+    warnings.warn(f"allgather_gemm/gemm_reduce_scatter unavailable (pyrocshmem not installed): {e}")
 
 __all__ = [
     "ag_gemm_intra_node",

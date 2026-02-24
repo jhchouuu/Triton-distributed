@@ -251,11 +251,15 @@ class EPAll2AllLayer(torch.nn.Module):
         weight_dtype=torch.float32,
         num_sm=20,
         enable_local_combine: bool = False,
+        dispatch_grid_size: int = 512,
+        combine_grid_size: int = 304,
     ):
         super().__init__()
         self.offset_dtype = torch.int32
         self.ep_group = ep_group
         self.num_sm = num_sm
+        self.dispatch_grid_size = dispatch_grid_size
+        self.combine_grid_size = combine_grid_size
         self.max_tokens = max_tokens
         self.topk = topk
         self.hidden = hidden
@@ -388,7 +392,7 @@ class EPAll2AllLayer(torch.nn.Module):
             with_scatter_indices = True
 
         dispatch_recv_token_num = output_buf.shape[0]
-        dispatch_grid = (min(dispatch_recv_token_num, 256),)
+        dispatch_grid = (min(dispatch_recv_token_num, self.dispatch_grid_size),)
         kernel_dispatch_token_intra_node[dispatch_grid](
             dispatch_recv_token_num,
             self.a2a_ctx.intra_node_dispatch_skipped_token_mapping_indices,
@@ -423,7 +427,7 @@ class EPAll2AllLayer(torch.nn.Module):
             dtype=self.a2a_ctx.intra_node_dispatch_skipped_token_topk_mapping_indices.dtype,
             device=self.a2a_ctx.intra_node_dispatch_skipped_token_topk_mapping_indices.device,
         )
-        copy_grid = (min(dispatch_recv_token_num, 256),)
+        copy_grid = (min(dispatch_recv_token_num, self.dispatch_grid_size),)
         kernel_skipped_token_local_dispatch_intra_node[copy_grid](
             dispatch_recv_token_num,
             self.a2a_ctx.intra_node_dispatch_skipped_token_mapping_indices,
@@ -556,7 +560,7 @@ class EPAll2AllLayer(torch.nn.Module):
             assert ep_a2a_layout_desc.skipped_token_mapping_indices is not None
             assert ep_a2a_layout_desc.skipped_token_mapping_indices.shape[0] == input.shape[0]
             # Warp-level pre-combine using simt_exec_region + ld()/st().
-            precombine_grid = (min(input.shape[0], 256),)
+            precombine_grid = (min(input.shape[0], self.combine_grid_size),)
             kernel_skipped_token_inplace_local_combine_intra_node[precombine_grid](
                 input.shape[0],
                 ep_a2a_layout_desc.skipped_token_mapping_indices,
@@ -576,7 +580,7 @@ class EPAll2AllLayer(torch.nn.Module):
         scatter_idx_i32 = ep_a2a_layout_desc.token_dst_scatter_idx.to(
             torch.int32
         )
-        combine_grid = (min(ep_a2a_layout_desc.num_dispatch_token_cur_rank, 256),)
+        combine_grid = (min(ep_a2a_layout_desc.num_dispatch_token_cur_rank, self.combine_grid_size),)
         kernel_combine_token_intra_node[combine_grid](
             ep_a2a_layout_desc.num_dispatch_token_cur_rank,
             input,

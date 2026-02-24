@@ -134,22 +134,18 @@ def kernel_dispatch_token_intra_node(
                             token_dst_scatter_idx + token_offset * topk + topk_idx
                         ).to(tl.uint64)
 
-                # P2P transfer via dl.symm_at + per-lane ld/st
                 src_ptr = input_buf + token_offset * hidden_size
-                remote_dst = dl.symm_at(output_buf, expert_rank) + store_idx * hidden_size
-                lane_id = thread_idx % WARP_SIZE
+                dst_ptr = output_buf + store_idx * hidden_size
                 if not skip_this_token:
-                    for i in range(lane_id, hidden_size, WARP_SIZE):
-                        st(remote_dst + i, ld(src_ptr + i))
-                    if lane_id == 0:
-                        st(
-                            dl.symm_at(
-                                intra_node_dispatch_skipped_token_mapping_indices + store_idx,
-                                expert_rank,
-                            ),
-                            skipped_token_mapping_idx,
-                            semantic="release",
-                        )
+                    libshmem_device.putmem_signal_warp(
+                        dst_ptr,
+                        src_ptr,
+                        bytes_per_token,
+                        intra_node_dispatch_skipped_token_mapping_indices + store_idx,
+                        skipped_token_mapping_idx,
+                        libshmem_device.MORI_SIGNAL_SET,
+                        expert_rank,
+                    )
                 else:
                     if thread_idx % WARP_SIZE == 0:
                         st(
