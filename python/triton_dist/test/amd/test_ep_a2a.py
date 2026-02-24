@@ -397,10 +397,11 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     #  Performance benchmark
     # -----------------------------------------------------------------------
-    for rid in range(args.rounds):
-        token_num = random.randint(args.M // 2, args.M)
+    for rid in range(-1, args.rounds):
+        token_num = args.M if rid == -1 else random.randint(args.M // 2, args.M)
         if RANK == 0:
-            print(f"\n--- Round {rid+1}/{args.rounds}, tokens={token_num} ---")
+            tag = "fixed" if rid == -1 else f"{rid+1}/{args.rounds}"
+            print(f"\n--- Round {tag}, tokens={token_num} ---")
 
         input, exp_indices, full_scatter_indices = _make_data(token_num)
 

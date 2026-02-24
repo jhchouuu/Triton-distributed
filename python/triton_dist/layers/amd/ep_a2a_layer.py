@@ -286,8 +286,8 @@ class EPAll2AllLayer(torch.nn.Module):
             offset_dtype=torch.int32,
         )
         self.a2a_ctx = DispatchCombineContext.create(self.ep_config)
-        self._needs_postprocess = False  # skip on first dispatch
-        self.intra_node_barrier_ctx = None  # TODO(AMD): BarrierAllContext if needed
+        self._needs_postprocess = False
+        self.intra_node_barrier_ctx = None
 
         mori_shmem_barrier_all_on_stream()
 
@@ -310,8 +310,7 @@ class EPAll2AllLayer(torch.nn.Module):
         full_splits_buf = self.a2a_ctx.full_splits_buf
         splits_signal_buf = self.a2a_ctx.splits_signal_buf
 
-        # GPU bincount kernel (AMD ep_a2a); output buffer must be zeroed before atomic_add.
-        local_splits_buf.zero_()
+        # GPU bincount — writes directly to SHMEM buffer via atomics
         exp_flat = exp_indices.contiguous().view(-1).to(torch.int32)
         bincount(
             exp_flat,
@@ -320,8 +319,7 @@ class EPAll2AllLayer(torch.nn.Module):
             output_dtype=local_splits_buf.dtype,
             num_sm=self.num_sm,
         )
-        torch.cuda.synchronize()
-        
+        # No synchronize needed — bincount and get_ag_splits run on same stream
         (
             recv_buf_offset_per_expert,
             num_recv_tokens_per_rank,
@@ -390,7 +388,8 @@ class EPAll2AllLayer(torch.nn.Module):
             with_scatter_indices = True
 
         dispatch_recv_token_num = output_buf.shape[0]
-        kernel_dispatch_token_intra_node[grid](
+        dispatch_grid = (min(dispatch_recv_token_num, 256),)
+        kernel_dispatch_token_intra_node[dispatch_grid](
             dispatch_recv_token_num,
             self.a2a_ctx.intra_node_dispatch_skipped_token_mapping_indices,
             self.a2a_ctx.intra_node_dispatch_skipped_token_topk_mapping_indices,
@@ -424,7 +423,8 @@ class EPAll2AllLayer(torch.nn.Module):
             dtype=self.a2a_ctx.intra_node_dispatch_skipped_token_topk_mapping_indices.dtype,
             device=self.a2a_ctx.intra_node_dispatch_skipped_token_topk_mapping_indices.device,
         )
-        kernel_skipped_token_local_dispatch_intra_node[grid](
+        copy_grid = (min(dispatch_recv_token_num, 256),)
+        kernel_skipped_token_local_dispatch_intra_node[copy_grid](
             dispatch_recv_token_num,
             self.a2a_ctx.intra_node_dispatch_skipped_token_mapping_indices,
             self.a2a_ctx.intra_node_dispatch_skipped_token_topk_mapping_indices,
@@ -498,7 +498,6 @@ class EPAll2AllLayer(torch.nn.Module):
             and exp_indices.shape[1] == self.topk
         )
         current_stream = torch.cuda.current_stream()
-        # Reset buffers from previous round (skip on first call)
         if self._needs_postprocess:
             self.dispatch_postprocess()
             self.ep_barrier_all(current_stream)
@@ -532,9 +531,6 @@ class EPAll2AllLayer(torch.nn.Module):
             ep_a2a_layout_desc,
             has_weight=has_weight,
         )
-        # dispatch_token already has an internal barrier after P2P writes.
-        # dispatch_postprocess (buffer reset) is deferred to combine() exit
-        # to avoid an extra barrier pair here.
         copy_out = torch.empty(
             output_buf.shape, dtype=output_buf.dtype, device=output_buf.device
         )
@@ -560,14 +556,15 @@ class EPAll2AllLayer(torch.nn.Module):
             assert ep_a2a_layout_desc.skipped_token_mapping_indices is not None
             assert ep_a2a_layout_desc.skipped_token_mapping_indices.shape[0] == input.shape[0]
             # Warp-level pre-combine using simt_exec_region + ld()/st().
-            kernel_skipped_token_inplace_local_combine_intra_node[grid](
+            precombine_grid = (min(input.shape[0], 256),)
+            kernel_skipped_token_inplace_local_combine_intra_node[precombine_grid](
                 input.shape[0],
                 ep_a2a_layout_desc.skipped_token_mapping_indices,
                 ep_a2a_layout_desc.skipped_token_topk_mapping_indices,
                 input,
                 self.hidden,
                 self.topk,
-                num_warps=16,
+                BLOCK_H=1024,
             )
             self.ep_barrier_all(current_stream)
         combine_intra_node_out_buf = torch.empty(
@@ -579,7 +576,6 @@ class EPAll2AllLayer(torch.nn.Module):
         scatter_idx_i32 = ep_a2a_layout_desc.token_dst_scatter_idx.to(
             torch.int32
         )
-        # Use larger grid for better P2P latency hiding
         combine_grid = (min(ep_a2a_layout_desc.num_dispatch_token_cur_rank, 256),)
         kernel_combine_token_intra_node[combine_grid](
             ep_a2a_layout_desc.num_dispatch_token_cur_rank,
@@ -594,14 +590,13 @@ class EPAll2AllLayer(torch.nn.Module):
             self.experts_per_rank,
             self.local_world_size,
             ENABLE_LOCAL_COMBINE=self.enable_local_combine,
-            BLOCK_H=1024,
+            num_warps=16,
         )
         return combine_intra_node_out_buf
 
     def combine(self, input, ep_a2a_layout_desc: EPAllToAllLayoutDesc):
         assert input.is_contiguous() and input.dtype == self.dtype
         current_stream = torch.cuda.current_stream()
-        # token_send_buf_rdma.fill_(0) removed — not used by intra-node combine
         self.a2a_ctx.dispatch_output_buf[: input.shape[0]].copy_(input)
         combine_input = self.a2a_ctx.dispatch_output_buf[: input.shape[0]]
         self.ep_barrier_all(current_stream)
