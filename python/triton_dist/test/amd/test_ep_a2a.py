@@ -57,12 +57,12 @@ Performance (MI325X, 8 GPU, N=7168, G=256, topk=8, bench_iters=10,
   enable-local-combine mode:
     M     | PT disp | PT comb | TD disp | TD comb | disp  | comb  | total
     ------|---------|---------|---------|---------|-------|-------|------
-    4096  | 2.18ms  | 3.29ms  | 1.80ms  | 2.37ms  | 1.21x | 1.38x | 1.31x
-    3780  | 1.98ms  | 3.07ms  | 1.62ms  | 1.92ms  | 1.22x | 1.59x | 1.43x
-    3206  | 2.07ms  | 3.16ms  | 1.66ms  | 2.00ms  | 1.25x | 1.58x | 1.43x
-    2638  | 2.05ms  | 3.14ms  | 1.65ms  | 2.02ms  | 1.24x | 1.55x | 1.41x
-    2395  | 1.92ms  | 2.94ms  | 1.55ms  | 1.87ms  | 1.24x | 1.58x | 1.42x
-    2264  | 1.79ms  | 2.79ms  | 1.48ms  | 1.74ms  | 1.21x | 1.60x | 1.41x
+    4096  | 2.20ms  | 3.29ms  | 1.80ms  | 2.15ms  | 1.22x | 1.53x | 1.36x
+    3780  | 1.98ms  | 3.03ms  | 1.62ms  | 1.71ms  | 1.22x | 1.77x | 1.51x
+    3206  | 2.07ms  | 3.16ms  | 1.67ms  | 1.84ms  | 1.24x | 1.72x | 1.49x
+    2638  | 2.05ms  | 3.13ms  | 1.66ms  | 1.83ms  | 1.24x | 1.71x | 1.47x
+    2395  | 1.93ms  | 2.95ms  | 1.56ms  | 1.72ms  | 1.24x | 1.71x | 1.48x
+    2264  | 1.80ms  | 2.81ms  | 1.47ms  | 1.58ms  | 1.22x | 1.78x | 1.53x
 
   with-scatter-indices mode:
     M     | PT disp | PT comb | TD disp | TD comb | disp  | comb  | total

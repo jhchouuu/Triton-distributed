@@ -163,7 +163,7 @@ def kernel_dispatch_token_intra_node(
                             + j,
                             expert_rank,
                         ),
-                        store_idx,
+                        skipped_token_mapping_idx,
                     )
                 if HAS_WEIGHT:
                     libshmem_device.putmem_warp(
