@@ -255,6 +255,12 @@ def nvshmem_create_tensor(shape, dtype) -> torch.Tensor:
     torch.cuda.synchronize()
     return tensor
 
+def mori_shmem_create_tensor(shape, dtype) -> torch.Tensor:
+    # torch.cuda.synchronize()
+    tensor = mori_shmem.mori_shmem_create_tensor(shape, dtype=dtype)
+    # torch.cuda.synchronize()
+    return tensor
+
 
 def nvshmem_create_tensors(shape, dtype, rank, local_world_size) -> List[torch.Tensor]:
 
@@ -278,6 +284,11 @@ def nvshmem_free_tensor_sync(tensor):
     torch.cuda.synchronize()
     nvshmem.core.free_tensor(tensor)
     torch.cuda.synchronize()
+
+def mori_shmem_free_tensor_sync(tensor):
+    # torch.cuda.synchronize()
+    mori_shmem.mori_shmem_free_tensor(tensor)
+    # torch.cuda.synchronize()
 
 
 def finalize_distributed():

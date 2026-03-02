@@ -34,7 +34,7 @@ from tabulate import tabulate
 
 from triton_dist.profiler_utils import group_profile
 from triton_dist.utils import initialize_distributed, sleep_async, finalize_distributed
-from triton_dist.kernels.nvidia import create_all_to_all_context, fast_all_to_all, all_to_all_post_process
+from triton_dist.kernels.amd import create_all_to_all_context, fast_all_to_all, all_to_all_post_process
 
 
 def splits_to_cumsum(splits: torch.Tensor):
@@ -48,9 +48,8 @@ def calc_gather_index(
     scatter_index: torch.Tensor,
     row_start: int,
     row_end: int,
-    BLOCK_SIZE: int = 1024,
+    BLOCK_SIZE: int = 512,
 ):
-
     @triton.jit
     def _kernel(
         scatter_index: torch.Tensor,
@@ -76,6 +75,8 @@ def calc_gather_index(
     gather_index = torch.zeros(row_end - row_start, dtype=torch.int32, device=scatter_index.device)
     topk_index = torch.zeros(row_end - row_start, dtype=torch.int32, device=scatter_index.device)
     grid = lambda META: (triton.cdiv(ntokens * topk, META["BLOCK_SIZE"]), )
+    # AMD wave64: guard threads-per-block <= 1024 to avoid OOR.
+    num_warps = max(1, min(BLOCK_SIZE // 64, 16))
     _kernel[grid](
         scatter_index,
         gather_index,
@@ -85,7 +86,7 @@ def calc_gather_index(
         row_start,
         row_end,
         BLOCK_SIZE=BLOCK_SIZE,
-        num_warps=BLOCK_SIZE // 32,
+        num_warps=num_warps,
     )
     return gather_index, topk_index
 

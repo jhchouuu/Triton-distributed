@@ -29,7 +29,7 @@ from typing import Optional
 import triton_dist
 from triton_dist.language.extra import libshmem_device
 from triton_dist.language.extra.language_extra import tid
-from triton_dist.utils import NVSHMEM_SIGNAL_DTYPE, nvshmem_free_tensor_sync, nvshmem_create_tensor
+from triton_dist.utils import MORI_SHMEM_SIGNAL_DTYPE, mori_shmem_free_tensor_sync, mori_shmem_create_tensor
 
 
 @triton_dist.jit
@@ -92,28 +92,58 @@ def all_to_all_kernel(
     )
     if WITH_SCALE:
         scale_dst_ptr = scale_dst + act_pos * WORLD_SIZE * MAX_M + dst_off
-        libshmem_device.putmem_signal_nbi_block(
-            scale_dst_ptr,
-            scale_src + src_off,
-            num_rows_cur_block * SCALE_ELEMENT_SIZE,
-            signal_ptr,
-            call_count,
-            libshmem_device.NVSHMEM_SIGNAL_SET,
-            pid,
-        )
+        # TODO-yutongwu resolve mori shmem putmem_signal_nbi_block 0 bytes hang issue
+        # libshmem_device.putmem_signal_nbi_block(
+        #     scale_dst_ptr,
+        #     scale_src + src_off,
+        #     num_rows_cur_block * SCALE_ELEMENT_SIZE,
+        #     signal_ptr,
+        #     call_count,
+        #     libshmem_device.MORI_SIGNAL_SET,
+        #     pid,
+        # )
+        if num_rows_cur_block != 0:
+            libshmem_device.putmem_signal_nbi_block(
+                scale_dst_ptr,
+                scale_src + src_off,
+                num_rows_cur_block * SCALE_ELEMENT_SIZE,
+                signal_ptr,
+                call_count,
+                libshmem_device.MORI_SIGNAL_SET,
+                pid,
+            )
+        else:
+            libshmem_device.atomic_uint64_nonfetch(
+                signal_ptr,
+                call_count,
+                libshmem_device.MORI_SIGNAL_SET,
+                pid,
+            )
 
     libshmem_device.fence()
     if threadidx == 0:
+        # if not WITH_SCALE:
+        #     libshmem_device.signal_op(
+        #         signal_ptr,
+        #         call_count,
+        #         libshmem_device.MORI_SIGNAL_SET,
+        #         pid,
+        #     )
         if not WITH_SCALE:
-            libshmem_device.signal_op(
+            # TODO-yutongwu use signal op api
+            libshmem_device.atomic_uint64_nonfetch(
                 signal_ptr,
                 call_count,
-                libshmem_device.NVSHMEM_SIGNAL_SET,
+                libshmem_device.MORI_SIGNAL_SET,
                 pid,
             )
-        libshmem_device.signal_wait_until(
+        # libshmem_device.signal_wait_until(
+        #     signal + act_pos * WORLD_SIZE + pid,
+        #     libshmem_device.NVSHMEM_CMP_EQ,
+        #     call_count,
+        # )
+        libshmem_device.uint64_wait_until_equals(
             signal + act_pos * WORLD_SIZE + pid,
-            libshmem_device.NVSHMEM_CMP_EQ,
             call_count,
         )
 
@@ -138,13 +168,13 @@ class AllToAllContext:
         """
         max_m: max number of tokens per rank
         """
-        self.send_buf = nvshmem_create_tensor((max_m, hidden), dtype)
-        self.recv_buf = nvshmem_create_tensor((WORLD_SIZE * max_m * 2, hidden), dtype)
-        self.scale_send_buf = nvshmem_create_tensor((max_m, ), scale_dtype)
-        self.scale_recv_buf = nvshmem_create_tensor((WORLD_SIZE * max_m * 2, ), scale_dtype)
-        self.split_send_buf = nvshmem_create_tensor((num_tot_experts, ), torch.int32)
-        self.split_recv_buf = nvshmem_create_tensor((num_tot_experts * 2, ), torch.int32)
-        self.signal_buf = nvshmem_create_tensor((WORLD_SIZE * 2, ), NVSHMEM_SIGNAL_DTYPE)
+        self.send_buf = mori_shmem_create_tensor((max_m, hidden), dtype)
+        self.recv_buf = mori_shmem_create_tensor((WORLD_SIZE * max_m * 2, hidden), dtype)
+        self.scale_send_buf = mori_shmem_create_tensor((max_m, ), scale_dtype)
+        self.scale_recv_buf = mori_shmem_create_tensor((WORLD_SIZE * max_m * 2, ), scale_dtype)
+        self.split_send_buf = mori_shmem_create_tensor((num_tot_experts, ), torch.int32)
+        self.split_recv_buf = mori_shmem_create_tensor((num_tot_experts * 2, ), torch.int32)
+        self.signal_buf = mori_shmem_create_tensor((WORLD_SIZE * 2, ), MORI_SHMEM_SIGNAL_DTYPE)
 
         self.max_m = max_m
         self.hidden = hidden
@@ -164,13 +194,13 @@ class AllToAllContext:
         self.MOD_VALUE = 1000000
 
     def finalize(self):
-        nvshmem_free_tensor_sync(self.send_buf)
-        nvshmem_free_tensor_sync(self.recv_buf)
-        nvshmem_free_tensor_sync(self.scale_send_buf)
-        nvshmem_free_tensor_sync(self.scale_recv_buf)
-        nvshmem_free_tensor_sync(self.split_send_buf)
-        nvshmem_free_tensor_sync(self.split_recv_buf)
-        nvshmem_free_tensor_sync(self.signal_buf)
+        mori_shmem_free_tensor_sync(self.send_buf)
+        mori_shmem_free_tensor_sync(self.recv_buf)
+        mori_shmem_free_tensor_sync(self.scale_send_buf)
+        mori_shmem_free_tensor_sync(self.scale_recv_buf)
+        mori_shmem_free_tensor_sync(self.split_send_buf)
+        mori_shmem_free_tensor_sync(self.split_recv_buf)
+        mori_shmem_free_tensor_sync(self.signal_buf)
 
 
 def create_all_to_all_context(

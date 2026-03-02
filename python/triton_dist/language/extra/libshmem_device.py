@@ -318,6 +318,11 @@ def putmem_signal_nbi_wg(dest, source, bytes, sig_addr, signal, sig_op, pe):
 def signal_op(sig_addr, signal, sig_op, pe):
     ...
 
+# TODO-yutongwu use signal op api
+@_shmem_module.dispatch
+def atomic_uint64_nonfetch(dest, val, amoType, pe, qp_id=0):
+    ...
+
 
 @_shmem_module.dispatch
 def signal_wait_until(sig_addr, cmp_, cmp_val):

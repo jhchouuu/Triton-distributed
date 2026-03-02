@@ -246,6 +246,34 @@ def putmem_warp(dest, source, nbytes, pe, qp_id=0, _semantic=None):
         _semantic=_semantic,
     )
 
+@core.extern
+def putmem_nbi_block(dest, source, nbytes, pe, qp_id=0, _semantic=None):
+    """Non-blocking put memory operation (block scope).
+
+    All threads in the block must participate.
+
+    Args:
+        dest: Symmetric address on target PE
+        source: Source pointer on local PE
+        nbytes: Number of bytes to transfer
+        pe: Target PE number
+        qp_id: Queue Pair ID (default: 0)
+    """
+    return extern_call(
+        "libmori_shmem_device",
+        "",
+        [
+            tl.cast(dest, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(source, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(nbytes, tl.uint64, _semantic=_semantic),
+            tl.cast(pe, tl.int32, _semantic=_semantic),
+            tl.cast(qp_id, tl.int32, _semantic=_semantic),
+        ],
+        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.int32, tl.int32):
+         ("mori_shmem_putmem_nbi_block", ())},
+        is_pure=False,
+        _semantic=_semantic,
+    )
 
 @core.extern
 def put_uint32_nbi(dest, source, nelems, pe, qp_id=0, _semantic=None):
