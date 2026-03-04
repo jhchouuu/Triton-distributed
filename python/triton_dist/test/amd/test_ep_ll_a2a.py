@@ -32,8 +32,8 @@ import argparse
 import random
 import os
 
-from triton_dist.layers.nvidia import EPLowLatencyAllToAllLayer
-from triton_dist.test.nvidia.ep_a2a_utils import (
+from triton_dist.layers.amd import EPLowLatencyAllToAllLayer
+from triton_dist.test.amd.ep_a2a_utils import (
     torch_ll_dispatch,
     torch_ll_combine,
     dequant_fp8_bf16,
@@ -93,8 +93,12 @@ def parse_args():
 
 
 def straggler(rank):
-    clock_rate = torch.cuda.clock_rate() * 1e6
-    r = max(int(clock_rate * 0.00001), 1000)
+    try:
+        clock_rate = torch.cuda.clock_rate() * 1e6
+        r = max(int(clock_rate * 0.00001), 1000)
+    except Exception:
+        # Fallback when amdsmi clock query is unavailable/unreliable on some nodes.
+        r = 1000
     cycles = random.randint(0, r) * (rank + 1)
     torch.cuda._sleep(cycles)
 
@@ -139,6 +143,10 @@ if __name__ == "__main__":
 
             input_list = [_make_data(random.randint(1, args.M)) for _ in range(args.verify_iters)]
             triton_combine_out_list, dispatch_out_list, torch_input_list, torch_dispatch_out_list, torch_combine_out_list = [], [], [], [], []
+            ref_combine_input_list, triton_combine_input_list = [], []
+            ref_dispatch_scale_list, triton_dispatch_scale_list = [], []
+            triton_expert_recv_count_list = []
+            ref_recv_tokens_list, triton_recv_tokens_list = [], []
 
             # torch impl
             for input, weight, exp_indices in input_list:
@@ -148,6 +156,9 @@ if __name__ == "__main__":
                     assert ref_dispatch_scale is None
 
                 ref_combine_input = dequant_fp8_bf16(ref_dispatch_out, ref_dispatch_scale)
+                ref_combine_input_list.append(ref_combine_input)
+                ref_dispatch_scale_list.append(ref_dispatch_scale)
+                ref_recv_tokens_list.append(int(ref_dispatch_out.shape[0]))
 
                 ref_combine_out = torch_ll_combine(EP_GROUP, ref_combine_input, exp_indices, weight, args.G)
                 torch_combine_out_list.append(ref_combine_out)
@@ -158,8 +169,13 @@ if __name__ == "__main__":
                 scales = None
                 triton_dispatch_out, triton_dispatch_scale, expert_recv_count, dispatch_meta = ep_ll_a2a_layer.dispatch(
                     input, scales, exp_indices)
+                if RANK == 0:
+                    triton_recv_tokens_list.append(int(expert_recv_count.sum().item()))
 
                 triton_combine_input = dequant_fp8_bf16(triton_dispatch_out, triton_dispatch_scale)
+                triton_combine_input_list.append(triton_combine_input)
+                triton_dispatch_scale_list.append(triton_dispatch_scale)
+                triton_expert_recv_count_list.append(expert_recv_count.clone())
 
                 triton_combine_out = ep_ll_a2a_layer.combine(triton_combine_input, exp_indices, weight, dispatch_meta)
 
@@ -174,6 +190,59 @@ if __name__ == "__main__":
                 try:
                     torch.testing.assert_close(torch_combine_out, triton_combine_out, atol=0, rtol=0)
                 except Exception as e:
+                    ref_f = torch_combine_out.float()
+                    tri_f = triton_combine_out.float()
+                    if RANK == 0:
+                        ref_in = ref_combine_input_list[idx].float()
+                        tri_in = triton_combine_input_list[idx].float()
+                        ref_recv_tokens = ref_recv_tokens_list[idx]
+                        triton_recv_tokens = triton_recv_tokens_list[idx]
+                        print(
+                            "[debug][recv_tokens] "
+                            f"ref_recv_tokens={ref_recv_tokens}, triton_recv_tokens={triton_recv_tokens}, "
+                            f"expert_nonzero={int((expert_recv_count > 0).sum().item())}"
+                        )
+                        print(
+                            "[debug][combine] "
+                            f"ref(min/max/mean)=({ref_f.min().item():.6f}/{ref_f.max().item():.6f}/{ref_f.mean().item():.6f}), "
+                            f"triton(min/max/mean)=({tri_f.min().item():.6f}/{tri_f.max().item():.6f}/{tri_f.mean().item():.6f}), "
+                            f"ref_nz={(ref_f != 0).float().mean().item():.6f}, "
+                            f"tri_nz={(tri_f != 0).float().mean().item():.6f}"
+                        )
+                        print(
+                            "[debug][dispatch_dequant] "
+                            f"ref(min/max/mean)=({ref_in.min().item():.6f}/{ref_in.max().item():.6f}/{ref_in.mean().item():.6f}), "
+                            f"triton(min/max/mean)=({tri_in.min().item():.6f}/{tri_in.max().item():.6f}/{tri_in.mean().item():.6f}), "
+                            f"ref_nz={(ref_in != 0).float().mean().item():.6f}, "
+                            f"tri_nz={(tri_in != 0).float().mean().item():.6f}"
+                        )
+                        ref_sc = ref_dispatch_scale_list[idx].float()
+                        tri_sc = triton_dispatch_scale_list[idx].float()
+                        tri_counts = triton_expert_recv_count_list[idx].int().cpu()
+                        tri_active_scale_chunks = []
+                        for exp_i in range(tri_counts.numel()):
+                            cnt = int(tri_counts[exp_i].item())
+                            if cnt > 0:
+                                tri_active_scale_chunks.append(tri_sc[exp_i, :cnt, :].reshape(-1))
+                        if len(tri_active_scale_chunks) > 0:
+                            tri_active_sc = torch.cat(tri_active_scale_chunks, dim=0)
+                        else:
+                            tri_active_sc = tri_sc.new_empty((0, ))
+                        ref_active_sc = ref_sc.reshape(-1)
+                        print(
+                            "[debug][dispatch_scale] "
+                            f"ref(min/max/mean)=({ref_sc.min().item():.6f}/{ref_sc.max().item():.6f}/{ref_sc.mean().item():.6f}), "
+                            f"triton(min/max/mean)=({tri_sc.min().item():.6f}/{tri_sc.max().item():.6f}/{tri_sc.mean().item():.6f}), "
+                            f"ref_nz={(ref_sc != 0).float().mean().item():.6f}, "
+                            f"tri_nz={(tri_sc != 0).float().mean().item():.6f}"
+                        )
+                        if tri_active_sc.numel() > 0:
+                            print(
+                                "[debug][dispatch_scale_active] "
+                                f"ref(min/max/mean)=({ref_active_sc.min().item():.6f}/{ref_active_sc.max().item():.6f}/{ref_active_sc.mean().item():.6f}), "
+                                f"triton(min/max/mean)=({tri_active_sc.min().item():.6f}/{tri_active_sc.max().item():.6f}/{tri_active_sc.mean().item():.6f}), "
+                                f"numel_ref={ref_active_sc.numel()}, numel_triton={tri_active_sc.numel()}"
+                            )
                     raise e
 
         print(f"RANK[{RANK}]: pass.")

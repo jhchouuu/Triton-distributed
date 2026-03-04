@@ -540,6 +540,14 @@ def __shfl_xor_sync_i32(value, mask):
 
 
 @triton.jit
+def pack_b32_v2(val0, val1):
+    """Pack two 32-bit values into one 64-bit value (val0: low 32, val1: high 32)."""
+    lo = tl.cast(tl.cast(val0, tl.uint32), tl.uint64)
+    hi = tl.cast(tl.cast(val1, tl.uint32), tl.uint64)
+    return lo | (hi << 32)
+
+
+@triton.jit
 def atomic_add_per_warp(barrier_ptr, value, scope: core.constexpr, semantic: core.constexpr):
     """Warp-level atomic add: lane 0 performs atomic_add, result is broadcast to all lanes.
 
@@ -560,6 +568,7 @@ __all__ = [
     "laneid",
     "atomic_cas",
     "atomic_add",
+    "pack_b32_v2",
     "atomic_add_per_warp",
     "__shfl_sync_i32",
     "__shfl_up_sync_i32",

@@ -257,7 +257,7 @@ def _get_amdsmi_device_index(device_id: int | None):
     uuid = _get_gpu_uuid(device_id)
 
     uuid_map = {get_uuid_by_physical_device_id(i)[-12:]: i for i in range(get_physical_device_count())}
-    # TODO-yutongwu fix error
+    # TODO-rocm fix error
     uuid_tail = uuid[-12:]
     if uuid_tail not in uuid_map:
         warnings.warn(

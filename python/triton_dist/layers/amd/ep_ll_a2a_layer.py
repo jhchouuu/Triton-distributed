@@ -28,7 +28,7 @@ from typing import Optional
 from dataclasses import dataclass
 import os
 
-from triton_dist.kernels.nvidia.low_latency_all_to_all_v2 import (
+from triton_dist.kernels.amd.low_latency_all_to_all_v2 import (
     dispatch_kernel_v2,
     create_ep_ll_a2a_ctx,
     combine_kernel_v2,
@@ -158,7 +158,7 @@ class EPLowLatencyAllToAllLayer:
             META_BYTES=self.dispatch_ctx.meta_bytes,
             MSG_SIZE=self.dispatch_ctx.msg_size,
             ENABLE_PROFILING=self.enable_profiling,
-            num_warps=32,
+            num_warps=16,
         )
         self.dispatch_ctx.update_phase()
         dispatch_meta = DispatchMetaInfo(recv_token_source_indices=recv_token_source_indices,
@@ -243,7 +243,7 @@ class EPLowLatencyAllToAllLayer:
             LOCAL_WORLD_SIZE=self.local_world_size,
             ZERO_COPY=zero_copy,
             ENABLE_PROFILING=self.enable_profiling,
-            num_warps=32,
+            num_warps=16,
         )
 
         self.combine_ctx.update_phase()

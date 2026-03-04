@@ -92,7 +92,6 @@ def all_to_all_kernel(
     )
     if WITH_SCALE:
         scale_dst_ptr = scale_dst + act_pos * WORLD_SIZE * MAX_M + dst_off
-        # TODO-yutongwu resolve mori shmem putmem_signal_nbi_block 0 bytes hang issue
         # libshmem_device.putmem_signal_nbi_block(
         #     scale_dst_ptr,
         #     scale_src + src_off,
@@ -113,7 +112,7 @@ def all_to_all_kernel(
                 pid,
             )
         else:
-            libshmem_device.atomic_uint64_nonfetch(
+            libshmem_device.signal_op(
                 signal_ptr,
                 call_count,
                 libshmem_device.MORI_SIGNAL_SET,
@@ -122,28 +121,16 @@ def all_to_all_kernel(
 
     libshmem_device.fence()
     if threadidx == 0:
-        # if not WITH_SCALE:
-        #     libshmem_device.signal_op(
-        #         signal_ptr,
-        #         call_count,
-        #         libshmem_device.MORI_SIGNAL_SET,
-        #         pid,
-        #     )
         if not WITH_SCALE:
-            # TODO-yutongwu use signal op api
-            libshmem_device.atomic_uint64_nonfetch(
+            libshmem_device.signal_op(
                 signal_ptr,
                 call_count,
                 libshmem_device.MORI_SIGNAL_SET,
                 pid,
             )
-        # libshmem_device.signal_wait_until(
-        #     signal + act_pos * WORLD_SIZE + pid,
-        #     libshmem_device.NVSHMEM_CMP_EQ,
-        #     call_count,
-        # )
-        libshmem_device.uint64_wait_until_equals(
+        libshmem_device.signal_wait_until(
             signal + act_pos * WORLD_SIZE + pid,
+            libshmem_device.NVSHMEM_CMP_EQ,
             call_count,
         )
 
