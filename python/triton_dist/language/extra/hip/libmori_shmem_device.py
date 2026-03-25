@@ -25,9 +25,20 @@
 from triton.language import core
 import triton.language as tl
 from triton_dist.language.core import extern_call
+import sys
 
 pi_u64_t = tl.core.pointer_type(tl.core.dtype("uint64"))
 pi_i64_t = tl.core.pointer_type(tl.core.dtype("int64"))
+
+
+# class mori_shmemi_cmp_type(Enum):
+MORI_CMP_EQ = 0
+MORI_CMP_NE = 1
+MORI_CMP_GT = 2
+MORI_CMP_LE = 3
+MORI_CMP_LT = 4
+MORI_CMP_GE = 5
+MORI_CMP_SENTINEL = sys.maxsize
 
 
 @core.extern
@@ -246,6 +257,64 @@ def putmem_warp(dest, source, nbytes, pe, qp_id=0, _semantic=None):
         _semantic=_semantic,
     )
 
+
+@core.extern
+def putmem_nbi_warp(dest, source, nbytes, pe, qp_id=0, _semantic=None):
+    """Non-blocking put memory operation (warp scope).
+
+    All threads in the warp must participate.
+
+    Args:
+        dest: Symmetric address on target PE
+        source: Source pointer on local PE
+        nbytes: Number of bytes to transfer
+        pe: Target PE number
+        qp_id: Queue Pair ID (default: 0)
+    """
+    return extern_call(
+        "libmori_shmem_device",
+        "",
+        [
+            tl.cast(dest, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(source, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(nbytes, tl.uint64, _semantic=_semantic),
+            tl.cast(pe, tl.int32, _semantic=_semantic),
+            tl.cast(qp_id, tl.int32, _semantic=_semantic),
+        ],
+        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.int32, tl.int32):
+         ("mori_shmem_putmem_nbi_warp", ())},
+        is_pure=False,
+        _semantic=_semantic,
+    )
+
+@core.extern
+def putmem_nbi_block(dest, source, nbytes, pe, qp_id=0, _semantic=None):
+    """Non-blocking put memory operation (block scope).
+
+    All threads in the block must participate.
+
+    Args:
+        dest: Symmetric address on target PE
+        source: Source pointer on local PE
+        nbytes: Number of bytes to transfer
+        pe: Target PE number
+        qp_id: Queue Pair ID (default: 0)
+    """
+    return extern_call(
+        "libmori_shmem_device",
+        "",
+        [
+            tl.cast(dest, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(source, tl.pointer_type(tl.void), _semantic=_semantic),
+            tl.cast(nbytes, tl.uint64, _semantic=_semantic),
+            tl.cast(pe, tl.int32, _semantic=_semantic),
+            tl.cast(qp_id, tl.int32, _semantic=_semantic),
+        ],
+        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.int32, tl.int32):
+         ("mori_shmem_putmem_nbi_block", ())},
+        is_pure=False,
+        _semantic=_semantic,
+    )
 
 @core.extern
 def put_uint32_nbi(dest, source, nelems, pe, qp_id=0, _semantic=None):
@@ -896,6 +965,12 @@ def atomic_uint64_nonfetch(dest, val, amoType, pe, qp_id=0, _semantic=None):
     )
 
 
+# TODO-yutongwu add signal op api
+def signal_op(sig_addr, signal, sig_op, pe, qp_id=0, _semantic=None):
+    """NVSHMEM-compatible signal op shim based on mori atomic uint64."""
+    return atomic_uint64_nonfetch(sig_addr, signal, sig_op, pe, qp_id, _semantic=_semantic)
+
+
 @core.extern
 def atomic_uint64_fetch(dest, val, compare, amoType, pe, qp_id=0, _semantic=None):
     """Atomic fetch uint64 operation (thread scope).
@@ -1161,6 +1236,15 @@ def uint64_wait_until_equals(addr, val, _semantic=None):
         is_pure=False,
         _semantic=_semantic,
     )
+
+
+def signal_wait_until(sig_addr, cmp_, cmp_val, _semantic=None):
+    """NVSHMEM-compatible wait shim for common EQ/GT cases on AMD."""
+    if cmp_ == MORI_CMP_EQ:
+        return uint64_wait_until_equals(sig_addr, cmp_val, _semantic=_semantic)
+    if cmp_ == MORI_CMP_GT:
+        return uint64_wait_until_greater_than(sig_addr, cmp_val, _semantic=_semantic)
+    raise RuntimeError(f"Unsupported cmp_ in signal_wait_until: {cmp_}")
 
 
 @core.extern
