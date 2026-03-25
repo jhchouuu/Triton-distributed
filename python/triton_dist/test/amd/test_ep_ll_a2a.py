@@ -250,11 +250,9 @@ if __name__ == "__main__":
         finalize_distributed()
         exit(0)
 
-    for rid in range(args.rounds):
-        # random simulate token received from dataloader
+    for rid in range(-1, args.rounds):
         L = args.M // 2 if not args.profile else args.M
-
-        token_num = random.randint(L, args.M)
+        token_num = args.M if rid == -1 else random.randint(L, args.M)
 
         print(f"Rank-{RANK}: Received {token_num} tokens")
 
@@ -262,7 +260,7 @@ if __name__ == "__main__":
         scales = None
         ctx = get_torch_prof_ctx(args.profile)
         with ctx:
-            (ref_dispatch_out, ref_dispatch_scale), _ = perf_func(
+            (ref_dispatch_out, ref_dispatch_scale), ref_dispatch_perf = perf_func(
                 partial(torch_ll_dispatch, EP_GROUP, input, exp_indices, args.G, args.quant_group_size,
                         args.online_quant_fp8), iters=100, warmup_iters=20)
             if not args.online_quant_fp8:
@@ -270,7 +268,7 @@ if __name__ == "__main__":
 
             ref_combine_input = dequant_fp8_bf16(ref_dispatch_out, ref_dispatch_scale)
 
-            ref_combine_out, _ = perf_func(
+            ref_combine_out, ref_combine_perf = perf_func(
                 partial(torch_ll_combine, EP_GROUP, ref_combine_input, exp_indices, weight, args.G), iters=100,
                 warmup_iters=20)
 
@@ -303,7 +301,15 @@ if __name__ == "__main__":
 
         torch.testing.assert_close(ref_combine_out, triton_combine_out, rtol=0, atol=0)
 
-        print(f"RANK {RANK}: triton dispatch perf = {triton_perf}ms, triton combine perf = {triton_combine_perf}ms")
+        if RANK == 0:
+            ref_total = ref_dispatch_perf + ref_combine_perf
+            tri_total = triton_perf + triton_combine_perf
+            print(
+                f"  tokens={token_num} | "
+                f"PyTorch: dispatch={ref_dispatch_perf:.3f}ms, combine={ref_combine_perf:.3f}ms, total={ref_total:.3f}ms | "
+                f"Triton:  dispatch={triton_perf:.3f}ms, combine={triton_combine_perf:.3f}ms, total={tri_total:.3f}ms | "
+                f"Speedup: dispatch={ref_dispatch_perf/triton_perf:.2f}x, combine={ref_combine_perf/triton_combine_perf:.2f}x, total={ref_total/tri_total:.2f}x"
+            )
 
     ep_ll_a2a_layer.dump_dispatch_trace()
     ep_ll_a2a_layer.dump_combine_trace()
