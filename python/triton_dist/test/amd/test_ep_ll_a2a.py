@@ -31,8 +31,28 @@ from functools import partial
 import argparse
 import random
 import os
+import filelock
 
 from triton_dist.layers.amd import EPLowLatencyAllToAllLayer
+
+
+def _patch_triton_cache():
+    """Monkey-patch FileCacheManager.put with filelock to fix multi-rank cold-cache race."""
+    from triton.runtime.cache import FileCacheManager
+    _orig_put = FileCacheManager.put
+
+    def _locked_put(self, data, filename, binary=True):
+        filepath = self._make_path(filename)
+        if os.path.exists(filepath):
+            return filepath
+        lock = filelock.FileLock(self.lock_path, timeout=300)
+        with lock:
+            return _orig_put(self, data, filename, binary)
+        return filepath
+
+    FileCacheManager.put = _locked_put
+
+_patch_triton_cache()
 from triton_dist.test.amd.ep_a2a_utils import (
     torch_ll_dispatch,
     torch_ll_combine,
@@ -272,10 +292,8 @@ if __name__ == "__main__":
                 partial(torch_ll_combine, EP_GROUP, ref_combine_input, exp_indices, weight, args.G), iters=100,
                 warmup_iters=20)
 
-            # warm up to avoid cudaMalloc caused by torch.empty
             _ = ep_ll_a2a_layer.dispatch(input, scales, exp_indices)
 
-            # avoid bound in host
             torch.cuda._sleep(int(1e9))
 
             (triton_dispatch_out, triton_dispatch_scale, expert_recv_count,
@@ -291,8 +309,6 @@ if __name__ == "__main__":
         torch.cuda.synchronize()
         torch.distributed.barrier()
 
-        torch.distributed.barrier()  # wait all rank dispatch
-
         if args.profile:
             run_id = os.environ["TORCHELASTIC_RUN_ID"]
             prof_dir = f"prof/{run_id}"
@@ -302,14 +318,14 @@ if __name__ == "__main__":
         torch.testing.assert_close(ref_combine_out, triton_combine_out, rtol=0, atol=0)
 
         if RANK == 0:
-            ref_total = ref_dispatch_perf + ref_combine_perf
-            tri_total = triton_perf + triton_combine_perf
-            print(
-                f"  tokens={token_num} | "
-                f"PyTorch: dispatch={ref_dispatch_perf:.3f}ms, combine={ref_combine_perf:.3f}ms, total={ref_total:.3f}ms | "
-                f"Triton:  dispatch={triton_perf:.3f}ms, combine={triton_combine_perf:.3f}ms, total={tri_total:.3f}ms | "
-                f"Speedup: dispatch={ref_dispatch_perf/triton_perf:.2f}x, combine={ref_combine_perf/triton_combine_perf:.2f}x, total={ref_total/tri_total:.2f}x"
-            )
+            tag = "fixed" if rid == -1 else f"{rid+1}/{args.rounds}"
+            print(f"\n--- Round {tag}, tokens={token_num} ---")
+            print(f"  PyTorch:  dispatch={ref_dispatch_perf:.3f}ms, combine={ref_combine_perf:.3f}ms")
+            print(f"  Triton:   dispatch={triton_perf:.3f}ms, combine={triton_combine_perf:.3f}ms")
+            print(f"  Speedup:  dispatch={ref_dispatch_perf/triton_perf:.2f}x, combine={ref_combine_perf/triton_combine_perf:.2f}x")
+            print(f"  Correctness: combine OK")
+
+        torch.distributed.barrier()
 
     ep_ll_a2a_layer.dump_dispatch_trace()
     ep_ll_a2a_layer.dump_combine_trace()
