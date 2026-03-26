@@ -325,6 +325,11 @@ def signal_wait_until(sig_addr, cmp_, cmp_val):
 
 
 @_shmem_module.dispatch
+def uint64_wait_until_equals(addr, val):
+    ...
+
+
+@_shmem_module.dispatch
 def ulong_put_signal(dest, source, nelems, sig_addr, signal, sig_op, pe):
     ...
 
