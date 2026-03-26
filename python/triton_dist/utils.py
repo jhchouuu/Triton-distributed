@@ -690,10 +690,21 @@ MORI_SHMEM_SIGNAL_DTYPE = torch.uint64
 
 def _get_mori_shmem_libdevice():
     if os.getenv("MORI_HOME") is not None:
-        mori_lib_dir = Path(os.getenv("MORI_HOME")) / "lib"
-    else:
-        mori_lib_dir = Path(triton_dist.__path__[0]) / "tools" / "compile"
-    return mori_lib_dir / "libmori_shmem_device.bc"
+        p = Path(os.getenv("MORI_HOME")) / "lib" / "libmori_shmem_device.bc"
+        if p.exists():
+            return p
+    p = Path(triton_dist.__path__[0]) / "tools" / "compile" / "libmori_shmem_device.bc"
+    if p.exists():
+        return p
+    try:
+        from mori.ir.bitcode import find_bitcode
+        return Path(find_bitcode())
+    except Exception:
+        pass
+    raise FileNotFoundError(
+        "libmori_shmem_device.bc not found. Either run scripts/build_mori_shmem.sh, "
+        "set MORI_HOME, or install mori with JIT support."
+    )
 
 
 def get_mori_shmem_hash():

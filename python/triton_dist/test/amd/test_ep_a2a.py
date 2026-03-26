@@ -84,26 +84,6 @@ import random
 os.environ.setdefault("TRITON_DIST_SHMEM_BACKEND", "mori_shmem")
 os.environ.setdefault("MORI_SHMEM_HEAP_SIZE", "4G")
 
-
-def _patch_triton_cache():
-    """Monkey-patch FileCacheManager.put with filelock to fix multi-rank cold-cache race."""
-    import filelock
-    from triton.runtime.cache import FileCacheManager
-    _orig_put = FileCacheManager.put
-
-    def _locked_put(self, data, filename, binary=True):
-        filepath = self._make_path(filename)
-        if os.path.exists(filepath):
-            return filepath
-        lock = filelock.FileLock(self.lock_path, timeout=300)
-        with lock:
-            return _orig_put(self, data, filename, binary)
-        return filepath
-
-    FileCacheManager.put = _locked_put
-
-_patch_triton_cache()
-
 _test_dir = os.path.dirname(os.path.abspath(__file__))
 _workspace_root = os.path.abspath(os.path.join(_test_dir, "../../../.."))
 _triton_dist_python_path = os.path.join(_workspace_root, "python")

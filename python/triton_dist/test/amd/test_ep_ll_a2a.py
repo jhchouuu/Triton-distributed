@@ -31,28 +31,8 @@ from functools import partial
 import argparse
 import random
 import os
-import filelock
 
 from triton_dist.layers.amd import EPLowLatencyAllToAllLayer
-
-
-def _patch_triton_cache():
-    """Monkey-patch FileCacheManager.put with filelock to fix multi-rank cold-cache race."""
-    from triton.runtime.cache import FileCacheManager
-    _orig_put = FileCacheManager.put
-
-    def _locked_put(self, data, filename, binary=True):
-        filepath = self._make_path(filename)
-        if os.path.exists(filepath):
-            return filepath
-        lock = filelock.FileLock(self.lock_path, timeout=300)
-        with lock:
-            return _orig_put(self, data, filename, binary)
-        return filepath
-
-    FileCacheManager.put = _locked_put
-
-_patch_triton_cache()
 from triton_dist.test.amd.ep_a2a_utils import (
     torch_ll_dispatch,
     torch_ll_combine,
