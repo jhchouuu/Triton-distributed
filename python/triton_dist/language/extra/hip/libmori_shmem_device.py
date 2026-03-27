@@ -30,7 +30,6 @@ import sys
 pi_u64_t = tl.core.pointer_type(tl.core.dtype("uint64"))
 pi_i64_t = tl.core.pointer_type(tl.core.dtype("int64"))
 
-
 # class mori_shmemi_cmp_type(Enum):
 MORI_CMP_EQ = 0
 MORI_CMP_NE = 1
@@ -287,6 +286,7 @@ def putmem_nbi_warp(dest, source, nbytes, pe, qp_id=0, _semantic=None):
         _semantic=_semantic,
     )
 
+
 @core.extern
 def putmem_nbi_block(dest, source, nbytes, pe, qp_id=0, _semantic=None):
     """Non-blocking put memory operation (block scope).
@@ -315,6 +315,7 @@ def putmem_nbi_block(dest, source, nbytes, pe, qp_id=0, _semantic=None):
         is_pure=False,
         _semantic=_semantic,
     )
+
 
 @core.extern
 def put_uint32_nbi(dest, source, nelems, pe, qp_id=0, _semantic=None):
@@ -496,8 +497,8 @@ def putmem_signal_warp(dest, source, bytes, sig_addr, signal_value, signal_op, p
             tl.cast(pe, tl.int32, _semantic=_semantic),
             tl.cast(qp_id, tl.int32, _semantic=_semantic),
         ],
-        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.pointer_type(tl.void), tl.uint64,
-          tl.int32, tl.int32, tl.int32): ("mori_shmem_putmem_nbi_signal_warp", ())},
+        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.pointer_type(tl.void), tl.uint64, tl.int32, tl.int32, tl.int32):
+         ("mori_shmem_putmem_nbi_signal_warp", ())},
         is_pure=False,
         _semantic=_semantic,
     )
@@ -530,8 +531,8 @@ def putmem_signal_nbi_block(dest, source, bytes, sig_addr, signal_value, signal_
             tl.cast(pe, tl.int32, _semantic=_semantic),
             tl.cast(qp_id, tl.int32, _semantic=_semantic),
         ],
-        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.pointer_type(tl.void), tl.uint64,
-          tl.int32, tl.int32, tl.int32): ("mori_shmem_putmem_nbi_signal_block", ())},
+        {(tl.pointer_type(tl.void), tl.pointer_type(tl.void), tl.uint64, tl.pointer_type(tl.void), tl.uint64, tl.int32, tl.int32, tl.int32):
+         ("mori_shmem_putmem_nbi_signal_block", ())},
         is_pure=False,
         _semantic=_semantic,
     )

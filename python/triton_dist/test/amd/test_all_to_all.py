@@ -50,6 +50,7 @@ def calc_gather_index(
     row_end: int,
     BLOCK_SIZE: int = 512,
 ):
+
     @triton.jit
     def _kernel(
         scatter_index: torch.Tensor,

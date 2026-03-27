@@ -197,25 +197,21 @@ if __name__ == "__main__":
                         tri_in = triton_combine_input_list[idx].float()
                         ref_recv_tokens = ref_recv_tokens_list[idx]
                         triton_recv_tokens = triton_recv_tokens_list[idx]
-                        print(
-                            "[debug][recv_tokens] "
-                            f"ref_recv_tokens={ref_recv_tokens}, triton_recv_tokens={triton_recv_tokens}, "
-                            f"expert_nonzero={int((expert_recv_count > 0).sum().item())}"
-                        )
+                        print("[debug][recv_tokens] "
+                              f"ref_recv_tokens={ref_recv_tokens}, triton_recv_tokens={triton_recv_tokens}, "
+                              f"expert_nonzero={int((expert_recv_count > 0).sum().item())}")
                         print(
                             "[debug][combine] "
                             f"ref(min/max/mean)=({ref_f.min().item():.6f}/{ref_f.max().item():.6f}/{ref_f.mean().item():.6f}), "
                             f"triton(min/max/mean)=({tri_f.min().item():.6f}/{tri_f.max().item():.6f}/{tri_f.mean().item():.6f}), "
                             f"ref_nz={(ref_f != 0).float().mean().item():.6f}, "
-                            f"tri_nz={(tri_f != 0).float().mean().item():.6f}"
-                        )
+                            f"tri_nz={(tri_f != 0).float().mean().item():.6f}")
                         print(
                             "[debug][dispatch_dequant] "
                             f"ref(min/max/mean)=({ref_in.min().item():.6f}/{ref_in.max().item():.6f}/{ref_in.mean().item():.6f}), "
                             f"triton(min/max/mean)=({tri_in.min().item():.6f}/{tri_in.max().item():.6f}/{tri_in.mean().item():.6f}), "
                             f"ref_nz={(ref_in != 0).float().mean().item():.6f}, "
-                            f"tri_nz={(tri_in != 0).float().mean().item():.6f}"
-                        )
+                            f"tri_nz={(tri_in != 0).float().mean().item():.6f}")
                         ref_sc = ref_dispatch_scale_list[idx].float()
                         tri_sc = triton_dispatch_scale_list[idx].float()
                         tri_counts = triton_expert_recv_count_list[idx].int().cpu()
@@ -234,15 +230,13 @@ if __name__ == "__main__":
                             f"ref(min/max/mean)=({ref_sc.min().item():.6f}/{ref_sc.max().item():.6f}/{ref_sc.mean().item():.6f}), "
                             f"triton(min/max/mean)=({tri_sc.min().item():.6f}/{tri_sc.max().item():.6f}/{tri_sc.mean().item():.6f}), "
                             f"ref_nz={(ref_sc != 0).float().mean().item():.6f}, "
-                            f"tri_nz={(tri_sc != 0).float().mean().item():.6f}"
-                        )
+                            f"tri_nz={(tri_sc != 0).float().mean().item():.6f}")
                         if tri_active_sc.numel() > 0:
                             print(
                                 "[debug][dispatch_scale_active] "
                                 f"ref(min/max/mean)=({ref_active_sc.min().item():.6f}/{ref_active_sc.max().item():.6f}/{ref_active_sc.mean().item():.6f}), "
                                 f"triton(min/max/mean)=({tri_active_sc.min().item():.6f}/{tri_active_sc.max().item():.6f}/{tri_active_sc.mean().item():.6f}), "
-                                f"numel_ref={ref_active_sc.numel()}, numel_triton={tri_active_sc.numel()}"
-                            )
+                                f"numel_ref={ref_active_sc.numel()}, numel_triton={tri_active_sc.numel()}")
                     raise e
 
         print(f"RANK[{RANK}]: pass.")
@@ -302,8 +296,10 @@ if __name__ == "__main__":
             print(f"\n--- Round {tag}, tokens={token_num} ---")
             print(f"  PyTorch:  dispatch={ref_dispatch_perf:.3f}ms, combine={ref_combine_perf:.3f}ms")
             print(f"  Triton:   dispatch={triton_perf:.3f}ms, combine={triton_combine_perf:.3f}ms")
-            print(f"  Speedup:  dispatch={ref_dispatch_perf/triton_perf:.2f}x, combine={ref_combine_perf/triton_combine_perf:.2f}x")
-            print(f"  Correctness: combine OK")
+            print(
+                f"  Speedup:  dispatch={ref_dispatch_perf/triton_perf:.2f}x, combine={ref_combine_perf/triton_combine_perf:.2f}x"
+            )
+            print("  Correctness: combine OK")
 
         torch.distributed.barrier()
 

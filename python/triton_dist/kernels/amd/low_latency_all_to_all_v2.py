@@ -49,7 +49,6 @@ from triton_dist.kernels.amd.common_ops import barrier_on_this_grid
 import triton_dist.language as dl
 from dataclasses import dataclass
 from triton_dist.tools.profiler import Profiler
-from triton.language import core
 
 
 @triton.jit
@@ -664,7 +663,8 @@ def create_ep_ll_a2a_ctx(max_m, hidden, topk, num_experts, online_quant_fp8, fp8
 
     for i in range(num_phases):
         send_token_buffer = mori_shmem_create_tensor([max_m, msg_size], dispatch_dtype)
-        recv_token_buffer = mori_shmem_create_tensor([num_experts_per_rank, world_size, max_m, msg_size], dispatch_dtype)
+        recv_token_buffer = mori_shmem_create_tensor([num_experts_per_rank, world_size, max_m, msg_size],
+                                                     dispatch_dtype)
         send_count_buffer = mori_shmem_create_tensor([world_size, num_experts_per_rank], torch.int32)
         recv_count_buffer = mori_shmem_create_tensor([world_size, num_experts_per_rank], torch.int32)
         signal_buffer = mori_shmem_create_tensor([
@@ -692,8 +692,8 @@ def create_ep_ll_a2a_ctx(max_m, hidden, topk, num_experts, online_quant_fp8, fp8
     combine_dtype = dtype
     combine_ctxs = []
     for i in range(num_phases):
-        send_tokens_comm_buf: torch.Tensor = mori_shmem_create_tensor([num_experts_per_rank, max_m * world_size, hidden],
-                                                                   combine_dtype)
+        send_tokens_comm_buf: torch.Tensor = mori_shmem_create_tensor(
+            [num_experts_per_rank, max_m * world_size, hidden], combine_dtype)
         recv_token_buffer: torch.Tensor = mori_shmem_create_tensor([num_experts, max_m, hidden], combine_dtype)
         signal_buffer: torch.Tensor = mori_shmem_create_tensor([
             num_experts,

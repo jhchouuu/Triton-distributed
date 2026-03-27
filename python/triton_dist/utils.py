@@ -255,6 +255,7 @@ def nvshmem_create_tensor(shape, dtype) -> torch.Tensor:
     torch.cuda.synchronize()
     return tensor
 
+
 def mori_shmem_create_tensor(shape, dtype) -> torch.Tensor:
     # torch.cuda.synchronize()
     tensor = mori_shmem.mori_shmem_create_tensor(shape, dtype=dtype)
@@ -284,6 +285,7 @@ def nvshmem_free_tensor_sync(tensor):
     torch.cuda.synchronize()
     nvshmem.core.free_tensor(tensor)
     torch.cuda.synchronize()
+
 
 def mori_shmem_free_tensor_sync(tensor):
     # torch.cuda.synchronize()
@@ -685,8 +687,10 @@ def get_mori_home() -> Path:
 def get_mori_version():
     return "unknown"
 
+
 # mori_shmem C++ device API uses uint64_t for signals.
 MORI_SHMEM_SIGNAL_DTYPE = torch.uint64
+
 
 def _get_mori_shmem_libdevice():
     if os.getenv("MORI_HOME") is not None:
@@ -701,10 +705,8 @@ def _get_mori_shmem_libdevice():
         return Path(find_bitcode())
     except Exception:
         pass
-    raise FileNotFoundError(
-        "libmori_shmem_device.bc not found. Either run scripts/build_mori_shmem.sh, "
-        "set MORI_HOME, or install mori with JIT support."
-    )
+    raise FileNotFoundError("libmori_shmem_device.bc not found. Either run scripts/build_mori_shmem.sh, "
+                            "set MORI_HOME, or install mori with JIT support.")
 
 
 def get_mori_shmem_hash():

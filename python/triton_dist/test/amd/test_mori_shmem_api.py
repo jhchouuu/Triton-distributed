@@ -240,8 +240,7 @@ def test_mori_shmem_device():
 
     try:
         assert actual_value == expected_value, (
-            f"putmem_signal_nbi_block failed: expected {expected_value}, got {actual_value}"
-        )
+            f"putmem_signal_nbi_block failed: expected {expected_value}, got {actual_value}")
         assert actual_signal == 1, f"signal value mismatch: expected 1, got {actual_signal}"
     except Exception as e:
         print(f"❌ _mori_shmem_put_signal_block #{mype} failed")

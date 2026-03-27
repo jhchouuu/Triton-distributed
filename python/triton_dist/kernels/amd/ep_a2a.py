@@ -57,7 +57,7 @@ def bincount(input_tensor, length, output=None, output_dtype=torch.int32, num_sm
     assert input_tensor.dim() == 1 and input_tensor.is_contiguous()
     assert output.size(0) >= length and output.dtype == output_dtype
     n = input_tensor.size(0)
-    grid = (num_sm,)
+    grid = (num_sm, )
     kernel_bincount[grid](n, input_tensor, output, length, num_sm, num_warps=num_warps)
     return output
 

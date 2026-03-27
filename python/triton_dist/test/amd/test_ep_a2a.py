@@ -91,11 +91,8 @@ if _triton_dist_python_path not in sys.path:
     sys.path.insert(0, _triton_dist_python_path)
 _current_pythonpath = os.environ.get("PYTHONPATH", "")
 if _triton_dist_python_path not in _current_pythonpath:
-    os.environ["PYTHONPATH"] = (
-        f"{_triton_dist_python_path}:{_current_pythonpath}"
-        if _current_pythonpath
-        else _triton_dist_python_path
-    )
+    os.environ["PYTHONPATH"] = (f"{_triton_dist_python_path}:{_current_pythonpath}"
+                                if _current_pythonpath else _triton_dist_python_path)
 
 _triton_python_path = os.path.join(_workspace_root, "3rdparty/triton/python")
 if os.path.exists(_triton_python_path):
@@ -171,13 +168,7 @@ def sort_by_vectors(x):
 
 
 def calc_scatter_index_stable(chosen_experts: torch.Tensor):
-    return (
-        chosen_experts.flatten()
-        .argsort(stable=True)
-        .argsort()
-        .int()
-        .view(chosen_experts.shape)
-    )
+    return (chosen_experts.flatten().argsort(stable=True).argsort().int().view(chosen_experts.shape))
 
 
 def calc_full_scatter_indices(exp_indices, max_tokens, world_size):
@@ -188,16 +179,12 @@ def calc_full_scatter_indices(exp_indices, max_tokens, world_size):
     torch.distributed.all_gather_into_tensor(ag_input_len, input_len)
     ag_input_len_list = ag_input_len.cpu().tolist()
 
-    padded_indices = torch.empty(
-        [max_tokens, topk], dtype=torch.int32, device=exp_indices.device
-    )
+    padded_indices = torch.empty([max_tokens, topk], dtype=torch.int32, device=exp_indices.device)
     padded_indices[:n_token] = exp_indices
     ag_padded_indices = [torch.empty_like(padded_indices) for _ in range(world_size)]
     torch.distributed.all_gather(ag_padded_indices, padded_indices)
 
-    ag_indices = torch.cat(
-        [t[: ag_input_len_list[i], :] for i, t in enumerate(ag_padded_indices)]
-    )
+    ag_indices = torch.cat([t[:ag_input_len_list[i], :] for i, t in enumerate(ag_padded_indices)])
     return calc_scatter_index_stable(ag_indices)
 
 
@@ -229,9 +216,7 @@ def torch_forward_single(input, exp_indices, num_experts):
     ep_size = WORLD_SIZE
     experts_per_rank = num_experts // ep_size
 
-    splits_gpu = torch.bincount(
-        exp_indices.view(-1), minlength=num_experts
-    ).to(torch.int32)[:num_experts]
+    splits_gpu = torch.bincount(exp_indices.view(-1), minlength=num_experts).to(torch.int32)[:num_experts]
     splits_cpu = splits_gpu.cpu()
 
     gather_idx = exp_indices.flatten().argsort(stable=True).to(torch.int32)
@@ -244,9 +229,7 @@ def torch_forward_single(input, exp_indices, num_experts):
 
     input_split_sizes = splits_cpu.reshape(ep_size, -1).sum(-1).tolist()
     output_split_sizes = a2a_splits_cpu.reshape(ep_size, -1).sum(-1).tolist()
-    a2a_output = torch.empty(
-        [int(a2a_splits_cpu.sum()), hidden], dtype=input.dtype, device=input.device
-    )
+    a2a_output = torch.empty([int(a2a_splits_cpu.sum()), hidden], dtype=input.dtype, device=input.device)
     torch.distributed.all_to_all_single(
         output=a2a_output,
         input=scattered_input,
@@ -268,25 +251,19 @@ def torch_backward_single(input, exp_indices, num_experts):
     ep_size = WORLD_SIZE
     experts_per_rank = num_experts // ep_size
 
-    splits_gpu = torch.bincount(
-        exp_indices.view(-1), minlength=num_experts
-    ).to(torch.int32)[:num_experts]
+    splits_gpu = torch.bincount(exp_indices.view(-1), minlength=num_experts).to(torch.int32)[:num_experts]
     splits_cpu = splits_gpu.cpu()
 
     _, index_sorted = exp_indices.flatten().sort(stable=True)
     gather_index = index_sorted.to(torch.int32) // topk
-    topk_index = torch.arange(0, topk, dtype=torch.int32, device="cuda").repeat(
-        exp_indices.size(0)
-    )[index_sorted]
+    topk_index = torch.arange(0, topk, dtype=torch.int32, device="cuda").repeat(exp_indices.size(0))[index_sorted]
     new_index = topk * gather_index + topk_index
 
     a2a_splits = torch.empty_like(splits_gpu)
     torch.distributed.all_to_all_single(a2a_splits, splits_gpu)
     a2a_splits_cpu = a2a_splits.cpu()
 
-    permute_a2a_splits_cpu = (
-        a2a_splits_cpu.reshape(-1, experts_per_rank).permute(-1, -2).flatten()
-    )
+    permute_a2a_splits_cpu = (a2a_splits_cpu.reshape(-1, experts_per_rank).permute(-1, -2).flatten())
     permute_list = torch.split(input, permute_a2a_splits_cpu.tolist())
     a2a_list = []
     for src in range(ep_size):
@@ -297,9 +274,7 @@ def torch_backward_single(input, exp_indices, num_experts):
     count_before_drop = exp_indices.numel()
     count_after_drop = splits_cpu.sum().item()
 
-    all2all_out = torch.empty(
-        [count_after_drop, input.shape[-1]], device=input.device, dtype=input.dtype
-    )
+    all2all_out = torch.empty([count_after_drop, input.shape[-1]], device=input.device, dtype=input.dtype)
     torch.distributed.all_to_all_single(
         output=all2all_out,
         input=a2a_expert_output,
@@ -315,9 +290,7 @@ def torch_backward_single(input, exp_indices, num_experts):
     all2all_out_padded[:count_after_drop] = all2all_out
     gather_output = torch.zeros_like(all2all_out_padded)
     gather_output[new_index] = all2all_out_padded
-    topk_reduce = gather_output.view(
-        (gather_output.size(0) // topk, topk, gather_output.size(-1))
-    ).sum(1)
+    topk_reduce = gather_output.view((gather_output.size(0) // topk, topk, gather_output.size(-1))).sum(1)
     return topk_reduce
 
 
@@ -331,9 +304,7 @@ if __name__ == "__main__":
     WORLD_SIZE = EP_GROUP.size()
     LOCAL_WORLD_SIZE = int(os.environ.get("LOCAL_WORLD_SIZE", WORLD_SIZE))
 
-    assert args.G % WORLD_SIZE == 0, (
-        f"num_experts {args.G} must be divisible by world_size {WORLD_SIZE}"
-    )
+    assert args.G % WORLD_SIZE == 0, (f"num_experts {args.G} must be divisible by world_size {WORLD_SIZE}")
 
     input_dtype = DTYPE_MAP[args.dtype]
 
@@ -358,9 +329,7 @@ if __name__ == "__main__":
         exp_indices = generate_random_exp_indices(token_num, args.G, args.topk).to("cuda")
         input = torch.randn(token_num, args.N, dtype=input_dtype, device="cuda")
         if args.with_scatter_indices:
-            full_scatter_indices = calc_full_scatter_indices(
-                exp_indices, args.M, WORLD_SIZE
-            )
+            full_scatter_indices = calc_full_scatter_indices(exp_indices, args.M, WORLD_SIZE)
         else:
             full_scatter_indices = None
         return input, exp_indices, full_scatter_indices
@@ -373,10 +342,7 @@ if __name__ == "__main__":
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
-            input_list = [
-                _make_data(random.randint(1, args.M))
-                for _ in range(args.verify_iters)
-            ]
+            input_list = [_make_data(random.randint(1, args.M)) for _ in range(args.verify_iters)]
             torch_dispatch_list = []
             torch_combine_list = []
             triton_dispatch_list = []
@@ -392,7 +358,9 @@ if __name__ == "__main__":
             # --- Triton distributed ---
             for input, exp_indices, full_scatter_indices in input_list:
                 dispatch_out, _, layout_desc = triton_a2a_op.dispatch(
-                    input, exp_indices, weight=None,
+                    input,
+                    exp_indices,
+                    weight=None,
                     full_scatter_indices=full_scatter_indices,
                 )
                 combine_out = triton_a2a_op.combine(dispatch_out, layout_desc)
@@ -400,33 +368,21 @@ if __name__ == "__main__":
                 triton_combine_list.append(combine_out)
 
             # --- Verify dispatch ---
-            for idx, (ref, tri) in enumerate(
-                zip(torch_dispatch_list, triton_dispatch_list)
-            ):
-                assert ref.shape == tri.shape, (
-                    f"dispatch shape mismatch: ref {ref.shape} vs triton {tri.shape}"
-                )
+            for idx, (ref, tri) in enumerate(zip(torch_dispatch_list, triton_dispatch_list)):
+                assert ref.shape == tri.shape, (f"dispatch shape mismatch: ref {ref.shape} vs triton {tri.shape}")
                 if args.with_scatter_indices:
                     torch.testing.assert_close(tri, ref, atol=0, rtol=0)
                 else:
-                    torch.testing.assert_close(
-                        sort_by_vectors(tri), sort_by_vectors(ref), atol=0, rtol=0
-                    )
+                    torch.testing.assert_close(sort_by_vectors(tri), sort_by_vectors(ref), atol=0, rtol=0)
 
             # --- Verify combine ---
-            for idx, (ref, tri) in enumerate(
-                zip(torch_combine_list, triton_combine_list)
-            ):
-                assert ref.shape == tri.shape, (
-                    f"combine shape mismatch: ref {ref.shape} vs triton {tri.shape}"
-                )
+            for idx, (ref, tri) in enumerate(zip(torch_combine_list, triton_combine_list)):
+                assert ref.shape == tri.shape, (f"combine shape mismatch: ref {ref.shape} vs triton {tri.shape}")
                 torch.testing.assert_close(tri, ref, atol=1e-2, rtol=1e-2)
 
             if RANK == 0:
-                print(
-                    f"  Round {n+1}/{args.iters}: "
-                    f"{args.verify_iters} iterations, dispatch + combine verified."
-                )
+                print(f"  Round {n+1}/{args.iters}: "
+                      f"{args.verify_iters} iterations, dispatch + combine verified.")
 
         print(f"RANK[{RANK}]: all checks passed.")
         triton_a2a_op.finalize()
@@ -447,24 +403,31 @@ if __name__ == "__main__":
         # PyTorch reference
         ref_dispatch, ref_dispatch_time = perf_func(
             partial(torch_forward_single, input, exp_indices, args.G),
-            iters=args.bench_iters, warmup_iters=20,
+            iters=args.bench_iters,
+            warmup_iters=20,
         )
         ref_combine, ref_combine_time = perf_func(
             partial(torch_backward_single, ref_dispatch, exp_indices, args.G),
-            iters=args.bench_iters, warmup_iters=20,
+            iters=args.bench_iters,
+            warmup_iters=20,
         )
 
         # Triton distributed
         (triton_dispatch, _, layout_desc), triton_dispatch_time = perf_func(
             partial(
-                triton_a2a_op.dispatch, input, exp_indices,
-                weight=None, full_scatter_indices=full_scatter_indices,
+                triton_a2a_op.dispatch,
+                input,
+                exp_indices,
+                weight=None,
+                full_scatter_indices=full_scatter_indices,
             ),
-            iters=args.bench_iters, warmup_iters=20,
+            iters=args.bench_iters,
+            warmup_iters=20,
         )
         triton_combine, triton_combine_time = perf_func(
             partial(triton_a2a_op.combine, triton_dispatch, layout_desc),
-            iters=args.bench_iters, warmup_iters=20,
+            iters=args.bench_iters,
+            warmup_iters=20,
         )
 
         torch.cuda.synchronize()
@@ -477,7 +440,8 @@ if __name__ == "__main__":
             torch.testing.assert_close(
                 sort_by_vectors(triton_dispatch),
                 sort_by_vectors(ref_dispatch),
-                atol=0, rtol=0,
+                atol=0,
+                rtol=0,
             )
         torch.testing.assert_close(triton_combine, ref_combine, atol=1e-2, rtol=1e-2)
 
@@ -487,35 +451,24 @@ if __name__ == "__main__":
             algo_bytes = recv_tokens * elem_bytes
             experts_per_rank = args.G // WORLD_SIZE
             rank_ids = exp_indices // experts_per_rank
-            unique_remote_puts = sum(
-                len(set(r.item() for r in row if r.item() != RANK))
-                for row in rank_ids
-            )
+            unique_remote_puts = sum(len(set(r.item() for r in row if r.item() != RANK)) for row in rank_ids)
             bus_bytes = unique_remote_puts * elem_bytes
-            def _bw(nbytes, ms): return nbytes / (ms * 1e-3) / 1e9
 
-            print(
-                f"  PyTorch:  dispatch={ref_dispatch_time:.3f}ms, "
-                f"combine={ref_combine_time:.3f}ms"
-            )
-            print(
-                f"  Triton:   dispatch={triton_dispatch_time:.3f}ms, "
-                f"combine={triton_combine_time:.3f}ms"
-            )
-            print(
-                f"  Speedup:  dispatch={ref_dispatch_time/triton_dispatch_time:.2f}x, "
-                f"combine={ref_combine_time/triton_combine_time:.2f}x"
-            )
-            print(
-                f"  AlgoBW:   dispatch={_bw(algo_bytes, triton_dispatch_time):.1f} GB/s, "
-                f"combine={_bw(algo_bytes, triton_combine_time):.1f} GB/s "
-                f"(recv={recv_tokens} tokens, {algo_bytes/1e6:.1f} MB)"
-            )
-            print(
-                f"  BusBW:    dispatch={_bw(bus_bytes, triton_dispatch_time):.1f} GB/s, "
-                f"combine={_bw(bus_bytes, triton_combine_time):.1f} GB/s "
-                f"(unique_remote_puts={unique_remote_puts}, {bus_bytes/1e6:.1f} MB)"
-            )
+            def _bw(nbytes, ms):
+                return nbytes / (ms * 1e-3) / 1e9
+
+            print(f"  PyTorch:  dispatch={ref_dispatch_time:.3f}ms, "
+                  f"combine={ref_combine_time:.3f}ms")
+            print(f"  Triton:   dispatch={triton_dispatch_time:.3f}ms, "
+                  f"combine={triton_combine_time:.3f}ms")
+            print(f"  Speedup:  dispatch={ref_dispatch_time/triton_dispatch_time:.2f}x, "
+                  f"combine={ref_combine_time/triton_combine_time:.2f}x")
+            print(f"  AlgoBW:   dispatch={_bw(algo_bytes, triton_dispatch_time):.1f} GB/s, "
+                  f"combine={_bw(algo_bytes, triton_combine_time):.1f} GB/s "
+                  f"(recv={recv_tokens} tokens, {algo_bytes/1e6:.1f} MB)")
+            print(f"  BusBW:    dispatch={_bw(bus_bytes, triton_dispatch_time):.1f} GB/s, "
+                  f"combine={_bw(bus_bytes, triton_combine_time):.1f} GB/s "
+                  f"(unique_remote_puts={unique_remote_puts}, {bus_bytes/1e6:.1f} MB)")
             print("  Correctness: dispatch OK, combine OK")
 
     triton_a2a_op.finalize()

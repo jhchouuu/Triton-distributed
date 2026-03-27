@@ -213,7 +213,11 @@ def test_ld_st_mixed_bitwidth():
 
     @triton.jit
     def _mixed_kernel(
-        input32, input64, out32, out64, size,
+        input32,
+        input64,
+        out32,
+        out64,
+        size,
     ):
         threads_per_block = language_extra.num_threads()
         t = language_extra.tid(0)
@@ -229,14 +233,14 @@ def test_ld_st_mixed_bitwidth():
             language_extra.st(out64 + i, v64 + 1)
 
     SIZE = 4096
-    x32 = torch.randint(0, 1000, (SIZE,), dtype=torch.int32, device=device)
-    x64 = torch.randint(0, 1000, (SIZE,), dtype=torch.int64, device=device).to(torch.uint64)
+    x32 = torch.randint(0, 1000, (SIZE, ), dtype=torch.int32, device=device)
+    x64 = torch.randint(0, 1000, (SIZE, ), dtype=torch.int64, device=device).to(torch.uint64)
     ref32 = (x32 + 1).to(torch.int32)
     ref64 = (x64.to(torch.int64) + 1).to(torch.uint64)
     o32 = torch.empty_like(x32)
     o64 = torch.empty_like(x64)
 
-    _mixed_kernel[(16,)](x32, x64, o32, o64, SIZE, num_warps=4)
+    _mixed_kernel[(16, )](x32, x64, o32, o64, SIZE, num_warps=4)
     torch.testing.assert_close(o32, ref32, atol=0, rtol=0)
     torch.testing.assert_close(o64, ref64, atol=0, rtol=0)
     print("✅ ld_st_mixed_bitwidth (int32 + uint64) Triton and Torch match")

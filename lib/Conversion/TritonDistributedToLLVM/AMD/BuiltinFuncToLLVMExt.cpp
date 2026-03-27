@@ -118,7 +118,8 @@ private:
         llvm_unreachable("unknown scope string");
     };
 
-    auto skipBitwidthPrefix = [](const SmallVector<StringRef> &parts) -> size_t {
+    auto skipBitwidthPrefix =
+        [](const SmallVector<StringRef> &parts) -> size_t {
       if (!parts.empty() &&
           llvm::all_of(parts[0], [](char c) { return std::isdigit(c); }))
         return 1;

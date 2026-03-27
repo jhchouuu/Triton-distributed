@@ -144,9 +144,9 @@ def atomic_cas(
             core.cast(target_value, dtype=ptr.dtype.element_ty, _semantic=_semantic),
         ],
         {(core.pointer_type(dtype), dtype, dtype): (
-            f"__triton_hip_atom_cas_{dtype.primitive_bitwidth}_{_sem}_{_fail}_{_scp}",
-            dtype,
-        )
+             f"__triton_hip_atom_cas_{dtype.primitive_bitwidth}_{_sem}_{_fail}_{_scp}",
+             dtype,
+         )
          for dtype in [
              core.dtype("int32"),
              core.dtype("uint32"),
@@ -196,9 +196,9 @@ def atomic_add(
             core.cast(value, dtype=ptr.dtype.element_ty, _semantic=_semantic),
         ],
         {(core.pointer_type(dtype), dtype): (
-            f"__triton_hip_atom_add_{dtype.primitive_bitwidth}_{_sem}_{_scp}",
-            dtype,
-        )
+             f"__triton_hip_atom_add_{dtype.primitive_bitwidth}_{_sem}_{_scp}",
+             dtype,
+         )
          for dtype in [
              core.dtype("int32"),
              core.dtype("uint32"),
@@ -241,9 +241,9 @@ def ld(
         "",
         [ptr],
         {(core.pointer_type(dtype), ): (
-            f"__triton_hip_load_{dtype.primitive_bitwidth}_{_sem}_{_scp}",
-            dtype,
-        )
+             f"__triton_hip_load_{dtype.primitive_bitwidth}_{_sem}_{_scp}",
+             dtype,
+         )
          for dtype in [
              core.dtype("int32"),
              core.dtype("uint32"),
@@ -290,9 +290,9 @@ def st(
         "",
         [ptr, core.cast(val, dtype=ptr.dtype.element_ty, _semantic=_semantic)],
         {(core.pointer_type(dtype), dtype): (
-            f"__triton_hip_store_{dtype.primitive_bitwidth}_{_sem}_{_scp}",
-            dtype,
-        )
+             f"__triton_hip_store_{dtype.primitive_bitwidth}_{_sem}_{_scp}",
+             dtype,
+         )
          for dtype in [
              core.dtype("int32"),
              core.dtype("uint32"),
@@ -484,11 +484,12 @@ def laneid(_semantic=None):
 # arbitrary lane specified by a byte-offset (lane_id * 4).
 # ---------------------------------------------------------------------------
 
+
 @core.extern
 def _ds_bpermute_b32(value, byte_offset, _semantic=None):
     """Low-level ds_bpermute_b32: read *value* from the lane at *byte_offset/4*."""
-    tl.static_assert(value.dtype == tl.int32 or value.dtype == tl.uint32,
-                     "_ds_bpermute_b32 only supports int32/uint32", _semantic=_semantic)
+    tl.static_assert(value.dtype == tl.int32 or value.dtype == tl.uint32, "_ds_bpermute_b32 only supports int32/uint32",
+                     _semantic=_semantic)
     return tl.inline_asm_elementwise(
         asm="ds_bpermute_b32 $0, $1, $2\ns_waitcnt lgkmcnt(0)",
         constraints="=v,v,v",
