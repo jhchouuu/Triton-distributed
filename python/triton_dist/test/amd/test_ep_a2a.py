@@ -482,6 +482,18 @@ if __name__ == "__main__":
         torch.testing.assert_close(triton_combine, ref_combine, atol=1e-2, rtol=1e-2)
 
         if RANK == 0:
+            recv_tokens = triton_dispatch.shape[0]
+            elem_bytes = args.N * input_dtype.itemsize
+            algo_bytes = recv_tokens * elem_bytes
+            experts_per_rank = args.G // WORLD_SIZE
+            rank_ids = exp_indices // experts_per_rank
+            unique_remote_puts = sum(
+                len(set(r.item() for r in row if r.item() != RANK))
+                for row in rank_ids
+            )
+            bus_bytes = unique_remote_puts * elem_bytes
+            def _bw(nbytes, ms): return nbytes / (ms * 1e-3) / 1e9
+
             print(
                 f"  PyTorch:  dispatch={ref_dispatch_time:.3f}ms, "
                 f"combine={ref_combine_time:.3f}ms"
@@ -493,6 +505,16 @@ if __name__ == "__main__":
             print(
                 f"  Speedup:  dispatch={ref_dispatch_time/triton_dispatch_time:.2f}x, "
                 f"combine={ref_combine_time/triton_combine_time:.2f}x"
+            )
+            print(
+                f"  AlgoBW:   dispatch={_bw(algo_bytes, triton_dispatch_time):.1f} GB/s, "
+                f"combine={_bw(algo_bytes, triton_combine_time):.1f} GB/s "
+                f"(recv={recv_tokens} tokens, {algo_bytes/1e6:.1f} MB)"
+            )
+            print(
+                f"  BusBW:    dispatch={_bw(bus_bytes, triton_dispatch_time):.1f} GB/s, "
+                f"combine={_bw(bus_bytes, triton_combine_time):.1f} GB/s "
+                f"(unique_remote_puts={unique_remote_puts}, {bus_bytes/1e6:.1f} MB)"
             )
             print("  Correctness: dispatch OK, combine OK")
 
